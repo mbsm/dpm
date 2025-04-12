@@ -1,0 +1,16 @@
+package dpm_msg;
+
+struct host_procs_t 
+{
+    // useconds since Unix Epoch
+    int64_t timestamp; 
+
+    // Remote host name
+    string hostname;
+
+    // number of procs managed by the remote host procman3
+    int32_t num_procs;
+
+    //procs info
+    proc_info_t procs[num_procs];
+}

@@ -1,0 +1,58 @@
+package dpm_msg;
+
+struct proc_info_t 
+{
+    // id of the command
+    string  name;
+
+    // group of the command
+    string group;
+
+    // deputy running execting the proccess
+    string hostname;
+
+    // procman3 state of the procces 
+    string state;
+
+    // status of the procces
+    string status;
+ 
+    // errors 
+    string errors;
+
+    // command
+    string cmd;
+
+    // cpu usage of the procces in % of one cpu [0,1]
+    float cpu;
+    
+    // Rss memory
+    int32_t mem_rss;
+
+    // virtual memory size
+    int32_t mem_vms;
+
+    
+    // priority asigned to the process -1 if stopped
+    int32_t priority;
+
+    // os pid of the procces -1 if stopped
+    int32_t pid;
+
+    // is oid if the parent process
+    int32_t ppid;
+
+
+    // auto restart flag asigned to the proccess
+    boolean auto_restart;
+
+    // realtime flag
+    boolean realtime;
+
+    // exit code
+    int8_t exit_code;
+
+    // run time (secondos)
+    int32_t runtime;
+
+}

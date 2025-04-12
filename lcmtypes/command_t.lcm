@@ -1,0 +1,26 @@
+package dpm_msg;
+
+struct command_t
+{
+    // id of the command
+    string  name;
+
+    // group of the command
+    string group;
+
+    // remote host that should execute the command
+    string hostname;
+
+    // commands: create, start, stop, delete
+    string command ;
+
+    // remote path of command to execute
+    string proc_command;
+
+    // auto restart flag 
+    boolean auto_restart; 
+
+    // realtime priority flag
+    boolean realtime;
+
+}

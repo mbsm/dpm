@@ -1,0 +1,11 @@
+package dpm_msg;
+
+struct proc_output_t
+{
+    int64_t timestamp;
+    string name;
+    string hostname;
+    string group;
+    string stdout;
+    string stderr;
+}
