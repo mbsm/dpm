@@ -16,3 +16,9 @@
 2025-04-12 21:29:57,366 - root - INFO - Command handler: Received command: start_process for process: 
 2025-04-12 21:29:57,366 - root - INFO - Start Process: Starting process: Obstacle Detect Node with command: /home/mbustos/agv1/nodes/bin/obstacle_detection_node
 2025-04-12 21:29:57,367 - root - INFO - Start Process: Started process: Obstacle Detect Node with PID 106085
+2025-04-12 21:45:23,518 - root - INFO - Command handler: Received command: stop_process for process: 
+2025-04-12 21:45:23,519 - root - INFO - Stop Process: Gracefully stopped process: VLP16 Node with PID 106073
+2025-04-12 21:45:33,557 - root - INFO - Command handler: Received command: stop_process for process: 
+2025-04-12 21:45:33,558 - root - INFO - Stop Process: Gracefully stopped process: Obstacle Detect Node with PID 106085
+2025-04-12 21:45:37,765 - root - INFO - Command handler: Received command: stop_process for process: 
+2025-04-12 21:45:37,766 - root - INFO - Stop Process: Gracefully stopped process: UKF Node with PID 103849

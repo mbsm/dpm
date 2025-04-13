@@ -118,12 +118,8 @@ class DPMAgent:
         return config
 
     def init_logging(self, current_dir):
-        log_dir = os.path.join(current_dir, "./log/")
-        if not os.path.exists(log_dir):
-            os.makedirs(log_dir)
-        log_file = os.path.join(log_dir, "dpm_agent.log")
+        #logs will go to the stderr, systemd will pick them up and write them to the journal
         logging.basicConfig(
-            filename=log_file,
             level=logging.INFO,
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
@@ -248,12 +244,12 @@ class DPMAgent:
             
     def start_group(self, group):
         for name, proc in self.processes:
-            if(proc[group]==group):
+            if(proc.group==group):
                 self.start_process(name)
                 
     def stop_group(self, group):
         for name, proc in self.processes:
-            if(proc[group]==group):
+            if(proc.group==group):
                 self.stop_process(name)
 
     def monitor_process(self, process_name):
@@ -388,20 +384,6 @@ class DPMAgent:
                 self.publish_host_procs()
 
 
-def daemonize():
-    if os.fork() > 0:
-        exit(0)
-    os.setsid()
-    if os.fork() > 0:
-        exit(0)
-    os.umask(0)
-    os.chdir("/")
-    os.close(0)
-    os.close(1)
-    os.close(2)
-
-
 if __name__ == "__main__":
-    # daemonize()
     agent = DPMAgent()
     agent.run()

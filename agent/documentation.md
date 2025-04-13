@@ -104,47 +104,110 @@ The main class for managing processes and publishing system metrics.
 
 ### **4. Usage**
 
-#### **4.1. Running the Script**
-To run the script:
+#### **4.1. Running the Script Manually**
+To run the agent directly from the command line (useful for testing):
 ```bash
-python3 procman3.py
+# Navigate to the agent directory
+cd /path/to/dpm/agent
+# Run the agent script
+python3 agent.py
 ```
+*Note: When run manually, logs will typically go to the console/stderr unless file logging is explicitly re-enabled in `agent.py`.*
 
-#### **4.2. Running as a Daemon**
-Uncomment the `daemonize()` call in the `__main__` block to run the script as a background daemon:
-```python
-if __name__ == "__main__":
-    daemonize()
-    procman = Procman3()
-    procman.run()
-```
+#### **4.2. Running as a Systemd Service (Recommended)**
+
+For running the agent automatically on boot and managing it as a system service on Ubuntu 18.04 or similar systems, use the provided `systemd` unit file and installation script.
+
+**Prerequisites:**
+*   Ensure `dpm-agent.service` and `install_dpm_agent.sh` are present in the agent directory (`/home/mbustos/dpm/agent/`).
+*   Make sure the paths (`WorkingDirectory`, `ExecStart`) inside `dpm-agent.service` are correct for your system.
+*   Ensure `install_dpm_agent.sh` has execute permissions (`chmod +x install_dpm_agent.sh`).
+
+**Installation:**
+1.  Navigate to the agent directory in your terminal.
+2.  Run the installation script with `sudo`:
+    ```bash
+    sudo ./install_dpm_agent.sh install
+    ```
+    This will:
+    *   Copy `dpm-agent.service` to `/etc/systemd/system/`.
+    *   Reload the `systemd` daemon.
+    *   Enable the `dpm-agent` service to start automatically on boot.
+
+**Starting/Stopping/Status:**
+*   **Start:** `sudo systemctl start dpm-agent.service`
+*   **Stop:** `sudo systemctl stop dpm-agent.service`
+*   **Restart:** `sudo systemctl restart dpm-agent.service`
+*   **Check Status:** `sudo systemctl status dpm-agent.service`
+
+**Uninstallation:**
+1.  Navigate to the agent directory in your terminal.
+2.  Run the installation script with the `uninstall` argument using `sudo`:
+    ```bash
+    sudo ./install_dpm_agent.sh uninstall
+    ```
+    This will:
+    *   Stop the service (if running).
+    *   Disable the service from starting on boot.
+    *   Remove the `dpm-agent.service` file from `/etc/systemd/system/`.
+    *   Reload the `systemd` daemon.
 
 #### **4.3. Sending Commands**
-Commands can be sent to the process manager via the LCM `command_channel`. The supported commands are:
+Commands are sent to the agent via the LCM `command_channel` defined in `dpm.yaml`. The DPM Master typically handles sending these commands based on user actions in the TUI or predefined configurations. Supported commands include:
 - `create_process`
 - `start_process`
 - `stop_process`
 - `delete_process`
-
-Each command must include the process name, command, and optional parameters (e.g., auto-restart, real-time priority).
+- `start_group`
+- `stop_group`
 
 ---
 
-### **5. Error Handling**
+### **5. Error Handling and Logging**
 
 #### **5.1. Configuration Errors**
-- Missing or unreadable configuration files raise `FileNotFoundError` or `PermissionError`.
-- Invalid YAML syntax raises `ValueError`.
+- Missing or unreadable configuration files (`dpm.yaml`) will likely cause errors during initialization.
+- Invalid YAML syntax will raise errors during parsing.
 
 #### **5.2. Process Management Errors**
-- Starting a process with an invalid command raises `FileNotFoundError`.
-- Setting real-time priority without sufficient permissions logs a `PermissionError`.
+- Attempting to manage non-existent processes will log warnings.
+- Errors during process start/stop (e.g., permission issues, invalid commands) will be logged.
 
 #### **5.3. LCM Errors**
-- Errors during LCM initialization or message handling raise `RuntimeError`.
+- Issues with LCM initialization (e.g., network configuration, invalid URL) can prevent the agent from starting or communicating.
 
-#### **5.4. Logging**
-All errors and warnings are logged to `./log/procman3.log`.
+#### **5.4. Viewing Logs (Systemd/Journald)**
+When running as a `systemd` service using the provided `dpm-agent.service` file, logs are directed to the `systemd` journal. Use `journalctl` to view them:
+
+1.  **View all logs for the service:**
+    ```bash
+    sudo journalctl -u dpm-agent.service
+    ```
+    This shows all stored logs for the unit since the journal began or was last rotated.
+
+2.  **Follow logs in real-time (like `tail -f`):**
+    ```bash
+    sudo journalctl -f -u dpm-agent.service
+    ```
+    This is useful for watching logs as the agent runs. Press `Ctrl+C` to stop following.
+
+3.  **View logs from the current boot:**
+    ```bash
+    sudo journalctl -b -u dpm-agent.service
+    ```
+
+4.  **View the last N lines:**
+    ```bash
+    sudo journalctl -n 50 -u dpm-agent.service # Shows the last 50 lines
+    ```
+
+5.  **Filter by time:**
+    ```bash
+    sudo journalctl -u dpm-agent.service --since "yesterday"
+    sudo journalctl -u dpm-agent.service --since "2025-04-13 10:00:00" --until "2025-04-13 11:00:00"
+    ```
+
+Remember to use `sudo` as accessing the system journal typically requires root privileges.
 
 ---
 
@@ -164,6 +227,38 @@ All errors and warnings are logged to `./log/procman3.log`.
    - `realtime`: `False`
 
 3. **Monitor Logs**:
-   Check `./log/procman3.log` for process activity and errors.
+   Since you configured the `dpm-agent.service` to use `StandardOutput=journal` and `StandardError=journal`, all the output from your agent's `logging` calls (which now go to stderr) will be captured by the `systemd` journal.
+
+You can view these logs using the `journalctl` command:
+
+1.  **View all logs for the service:**
+    ```bash
+    sudo journalctl -u dpm-agent.service
+    ```
+    This shows all stored logs for the unit since the journal began or was last rotated.
+
+2.  **Follow logs in real-time (like `tail -f`):**
+    ```bash
+    sudo journalctl -f -u dpm-agent.service
+    ```
+    This is useful for watching logs as the agent runs. Press `Ctrl+C` to stop following.
+
+3.  **View logs from the current boot:**
+    ```bash
+    sudo journalctl -b -u dpm-agent.service
+    ```
+
+4.  **View the last N lines:**
+    ```bash
+    sudo journalctl -n 50 -u dpm-agent.service # Shows the last 50 lines
+    ```
+
+5.  **Filter by time:**
+    ```bash
+    sudo journalctl -u dpm-agent.service --since "yesterday"
+    sudo journalctl -u dpm-agent.service --since "2025-04-13 10:00:00" --until "2025-04-13 11:00:00"
+    ```
+
+Remember to use `sudo` as accessing the system journal typically requires root privileges.
 
 ---
