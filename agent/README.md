@@ -1,4 +1,4 @@
-### Documentation for procman3.py
+### Documentation for DPM agent
 
 ---
 
