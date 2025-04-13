@@ -14,11 +14,11 @@ User=root
 
 # Set the working directory to where agent.py is located
 # IMPORTANT: Replace /home/mbustos/dpm/agent with the actual path
-WorkingDirectory=/home/mbustos/dpm/agent
+WorkingDirectory=/home/agv1/dpm/agent
 
 # Command to execute the agent
 # IMPORTANT: Ensure python3 points to the correct interpreter if using virtual environments
-ExecStart=/usr/bin/python3 /home/mbustos/dpm/agent/agent.py
+ExecStart=/usr/bin/python3 /home/agv1/dpm/agent/agent.py
 
 # Restart the service if it fails
 Restart=on-failure
