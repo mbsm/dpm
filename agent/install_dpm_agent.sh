@@ -15,6 +15,35 @@ DEST_PATH="/etc/systemd/system/${SERVICE_FILE_NAME}"
 install_service() {
     echo "Installing ${SERVICE_FILE_NAME}..."
 
+    # --- Install System Dependencies ---
+    echo "Checking/Installing system dependencies (python3-psutil)..."
+    # Check if apt-get is available
+    if ! command -v apt-get &> /dev/null; then
+        echo "ERROR: apt-get command not found. This script requires a Debian/Ubuntu based system to install dependencies."
+        echo "Please install 'python3-psutil' manually."
+        # Decide if you want to exit or continue without dependency check
+        # exit 1 # Option: Exit if apt-get is not found
+    else
+        # Update package list
+        echo "Updating package list (apt-get update)..."
+        apt-get update
+        if [ $? -ne 0 ]; then
+            echo "WARNING: Failed to update package lists. Proceeding with install attempt anyway."
+        fi
+
+        # Install python3-psutil
+        echo "Installing python3-psutil..."
+        apt-get install -y python3-psutil
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Failed to install python3-psutil using apt-get."
+            echo "Please install it manually (e.g., 'sudo apt-get install python3-psutil') and retry."
+            exit 1
+        fi
+        echo "System dependencies checked/installed."
+    fi
+    # --- End Dependency Install ---
+
+
     # Check if source service file exists
     if [ ! -f "${SOURCE_PATH}" ]; then
         echo "ERROR: Source service file not found at ${SOURCE_PATH}"
@@ -99,6 +128,7 @@ uninstall_service() {
         exit 1 # Exit here as system state might be inconsistent
     fi
 
+    # Note: This script does NOT uninstall system packages (like python3-psutil) during uninstall.
     echo ""
     echo "${SERVICE_FILE_NAME} uninstalled successfully."
 }
