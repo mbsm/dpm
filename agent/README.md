@@ -3,7 +3,7 @@
 ---
 
 #### **Overview**
-procman3.py is a process management system designed to manage and monitor processes on a host system. It uses the Lightweight Communications and Marshalling (LCM) library for inter-process communication and YAML for configuration. The script supports creating, starting, stopping, deleting, and monitoring processes, as well as publishing system and process metrics.
+DPM is a process management system designed to manage and monitor processes on a host system. It uses the Lightweight Communications and Marshalling (LCM) library for inter-process communication and YAML for configuration. The script supports creating, starting, stopping, deleting, and monitoring processes, as well as publishing system and process metrics.
 
 ---
 
@@ -92,13 +92,6 @@ The main class for managing processes and publishing system metrics.
   - `publish_host_procs()`: Publishes the status of all managed processes.
   - `publish_procs_outputs()`: Publishes the stdout and stderr of processes.
   - `run()`: Main loop for handling LCM messages and periodic tasks.
-
----
-
-#### **3.3. Utility Functions**
-- `get_ip()`: Retrieves the IP address of the host.
-- `set_nonblocking(fd)`: Sets a file descriptor to non-blocking mode.
-- `is_running(proc)`: Checks if a process is running.
 
 ---
 
