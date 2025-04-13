@@ -62,7 +62,7 @@ def is_running(proc):
 
 
 class DPMAgent:
-    def __init__(self, config_file="agent.yaml"):
+    def __init__(self, config_file="../dpm.yaml"):
         current_dir = os.path.dirname(os.path.realpath(__file__))
         config_path = os.path.join(current_dir, config_file)
         self.config = self.load_config(config_path)
@@ -144,6 +144,10 @@ class DPMAgent:
             self.stop_process(msg.name)
         elif msg.command == "delete_process":
             self.delete_process(msg.name)
+        elif msg.command == "start_group":
+            self.start_group(msg.group)
+        elif msg.command == "stop_group":
+            self.stop_group(msg.group)
         else:
             logging.warning(f"Command handler: Unknown command: {msg.command} for process: {msg.proc_command}")
 
@@ -168,6 +172,15 @@ class DPMAgent:
             "stderr": "",
         }
         logging.info(f"Create Process: Created process: {process_name} with command: {proc_command} auto_restart: {restart_on_failure} and realtime: {realtime}")
+        
+    def delete_process(self, process_name):
+        if process_name in self.processes:
+            if self.processes[process_name]["proc"] is not None:
+                self.stop_process(process_name)
+            del self.processes[process_name]
+            logging.info(f"Delete Process: Deleted process: {process_name}")
+        else:
+            logging.warning(f"Delete Process: Process {process_name} not found, ignoring command.")
 
     def start_process(self, process_name):
         if process_name not in self.processes:
@@ -232,15 +245,16 @@ class DPMAgent:
                 self.processes[process_name]["state"] = STATE_KILLED
         else:
             logging.warning(f"Stop Process: Process {process_name} not found, ignoring command.")
-
-    def delete_process(self, process_name):
-        if process_name in self.processes:
-            if self.processes[process_name]["proc"] is not None:
-                self.stop_process(process_name)
-            del self.processes[process_name]
-            logging.info(f"Delete Process: Deleted process: {process_name}")
-        else:
-            logging.warning(f"Delete Process: Process {process_name} not found, ignoring command.")
+            
+    def start_group(self, group):
+        for name, proc in self.processes:
+            if(proc[group]==group):
+                self.start_process(name)
+                
+    def stop_group(self, group):
+        for name, proc in self.processes:
+            if(proc[group]==group):
+                self.stop_process(name)
 
     def monitor_process(self, process_name):
         if process_name not in self.processes:
@@ -315,6 +329,7 @@ class DPMAgent:
         for process_name, proc_info in self.processes.items():
             msg_proc = proc_info_t()
             msg_proc.name = process_name
+            msg_proc.hostname = self.hostname
             proc = proc_info["proc"]
             if proc and is_running(proc):
                 msg_proc.cpu = proc.cpu_percent(interval=None) / 100.0

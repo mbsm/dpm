@@ -8,7 +8,7 @@ struct proc_info_t
     // group of the command
     string group;
 
-    // deputy running execting the proccess
+    // host running execting the proccess
     string hostname;
 
     // procman3 state of the procces 
@@ -52,7 +52,7 @@ struct proc_info_t
     // exit code
     int8_t exit_code;
 
-    // run time (secondos)
+    // run time (seconds)
     int32_t runtime;
 
 }

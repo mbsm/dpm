@@ -2,10 +2,10 @@
 
 #LCM Channels
 lcm_url: "udpm://239.255.76.67:7667?ttl=1"
-command_channel: "procman3/commands"
-host_info_channel: "procman3/host_info"
-proc_outputs_channel: "procman3/proc_outputs"
-host_procs_channel: "procman3/host_procs"
+command_channel: "DPM/commands"
+host_info_channel: "DPM/host_info"
+proc_outputs_channel: "DPM/proc_outputs"
+host_procs_channel: "DPM/host_procs"
 
 # Timer Intervals in s
 monitor_interval: 1

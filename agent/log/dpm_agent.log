@@ -1,2 +1,18 @@
-2025-04-12 10:56:20,335 - root - INFO - Host initialized with channels: command=procman3/commands, info=procman3/host_info
-2025-04-12 10:56:20,335 - root - INFO - Host running.
+2025-04-12 21:24:01,243 - root - INFO - Command handler: Received command: start_process for process: 
+2025-04-12 21:24:01,244 - root - INFO - Start Process: Starting process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node
+2025-04-12 21:24:01,244 - root - ERROR - Start Process: Failed to start process Planner Node: [Errno 2] No such file or directory: '/home/mbustos/agv1/nodes/bin/planner_node'
+2025-04-12 21:25:35,170 - root - INFO - Command handler: Received command: create_process for process: ~/agv1/nodes/bin/vlp16_node
+2025-04-12 21:25:35,170 - root - INFO - Create Process: Created process: VLP16 Node with command: ~/agv1/nodes/bin/vlp16_node auto_restart: True and realtime: False
+2025-04-12 21:25:38,714 - root - INFO - Command handler: Received command: start_process for process: 
+2025-04-12 21:25:38,714 - root - INFO - Start Process: Starting process: VLP16 Node with command: ~/agv1/nodes/bin/vlp16_node
+2025-04-12 21:25:38,715 - root - ERROR - Start Process: Failed to start process VLP16 Node: [Errno 2] No such file or directory: '~/agv1/nodes/bin/vlp16_node'
+2025-04-12 21:29:20,183 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/vlp16_node
+2025-04-12 21:29:20,183 - root - INFO - Create Process: Created process: VLP16 Node with command: /home/mbustos/agv1/nodes/bin/vlp16_node auto_restart: True and realtime: False
+2025-04-12 21:29:24,039 - root - INFO - Command handler: Received command: start_process for process: 
+2025-04-12 21:29:24,039 - root - INFO - Start Process: Starting process: VLP16 Node with command: /home/mbustos/agv1/nodes/bin/vlp16_node
+2025-04-12 21:29:24,041 - root - INFO - Start Process: Started process: VLP16 Node with PID 106073
+2025-04-12 21:29:52,742 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/obstacle_detection_node
+2025-04-12 21:29:52,742 - root - INFO - Create Process: Created process: Obstacle Detect Node with command: /home/mbustos/agv1/nodes/bin/obstacle_detection_node auto_restart: True and realtime: False
+2025-04-12 21:29:57,366 - root - INFO - Command handler: Received command: start_process for process: 
+2025-04-12 21:29:57,366 - root - INFO - Start Process: Starting process: Obstacle Detect Node with command: /home/mbustos/agv1/nodes/bin/obstacle_detection_node
+2025-04-12 21:29:57,367 - root - INFO - Start Process: Started process: Obstacle Detect Node with PID 106085
