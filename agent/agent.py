@@ -9,6 +9,7 @@ import socket
 import yaml
 import fcntl
 import sys
+import threading
 
 # Define process state constants
 STATE_READY = "T"
@@ -59,6 +60,14 @@ def is_running(proc):
     if proc is None:
         return False
     return proc.poll() is None
+
+
+def stream_reader(stream, output_list):
+    try:
+        for line in iter(stream.readline, b""):
+            output_list.append(line.decode("utf-8"))
+    except Exception as e:
+        logging.error(f"Stream Reader: Error reading stream: {e}")
 
 
 class DPMAgent:
@@ -194,10 +203,18 @@ class DPMAgent:
             logging.info(f"Start Process: Starting process: {process_name} with command: {proc_command}")
             try:
                 proc = psutil.Popen([proc_command], stdout=PIPE, stderr=PIPE)
-                set_nonblocking(proc.stdout)
-                set_nonblocking(proc.stderr)
                 self.processes[process_name]["proc"] = proc
                 self.processes[process_name]["state"] = STATE_RUNNING
+
+                # Start threads to read stdout and stderr
+                stdout_lines = []
+                stderr_lines = []
+                threading.Thread(target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True).start()
+                threading.Thread(target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True).start()
+
+                self.processes[process_name]["stdout_lines"] = stdout_lines
+                self.processes[process_name]["stderr_lines"] = stderr_lines
+
                 logging.info(f"Start Process: Started process: {process_name} with PID {proc.pid}")
 
                 if realtime:
@@ -275,8 +292,13 @@ class DPMAgent:
                     logging.info(f"Monitor Process: Restarting process {process_name}.")
                     self.start_process(process_name)
             else:
-                proc_info["stdout"] = proc.stdout.read1().decode("utf-8")
-                proc_info["stderr"] = proc.stderr.read1().decode("utf-8")
+                if "stdout_lines" in proc_info and "stderr_lines" in proc_info:
+                    proc_info["stdout"] = "".join(proc_info["stdout_lines"])
+                    proc_info["stderr"] = "".join(proc_info["stderr_lines"])
+                    proc_info["stdout_lines"].clear()
+                    proc_info["stderr_lines"].clear()
+                else:
+                    logging.warning(f"Monitor Process: Process {process_name} has no stdout or stderr streams.")
 
     def publish_host_info(self):
         current_time = time.time()
