@@ -287,7 +287,7 @@ class DPMAgent:
                 proc_info["state"] = STATE_FAILED
                 proc_info["exit_code"] = proc.poll()
                 proc_info["proc"] = None
-                proc_info["errors"] = "Process stopped unexpectedly."
+                #proc_info["errors"] = "Process stopped unexpectedly."
 
                 if proc_info["restart"]:
                     logging.info(f"Monitor Process: Restarting process {process_name}.")
