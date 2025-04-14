@@ -289,8 +289,9 @@ class DPMAgent:
                 proc_info["proc"] = None
                 #check if roc_info["stdout_lines"] and proc_info["stderr_lines"] are not None
                 if proc_info["stdout_lines"] is not None and proc_info["stderr_lines"] is not None:
-                    proc_info["errors"]   = "".join(proc_info["stdout_lines"])
-                    proc_info[["errors"] += "".join(proc_info["stderr_lines"])
+                    proc_info["errors"]   = "".join(proc_info["stdout_lines"]).join(proc_info["stderr_lines"])
+                    proc_info["stdout_lines"].clear()
+                    proc_info["stderr_lines"].clear()
                 else:
                     proc_info["errors"] = "Process stopped unexpectedly."
 
