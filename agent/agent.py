@@ -202,7 +202,7 @@ class DPMAgent:
         else:
             logging.info(f"Start Process: Starting process: {process_name} with command: {proc_command}")
             try:
-                proc = psutil.Popen([proc_command], stdout=PIPE, stderr=PIPE)
+                proc = psutil.Popen(proc_command.split(), stdout=PIPE, stderr=PIPE)
                 self.processes[process_name]["proc"] = proc
                 self.processes[process_name]["state"] = STATE_RUNNING
 
@@ -223,7 +223,7 @@ class DPMAgent:
                         logging.info(f"Start Process: Set real-time priority for process: {process_name} with PID {proc.pid}")
                     except PermissionError:
                         logging.error(f"Start Process: Failed to set real-time priority for process {process_name}: Permission denied.")
-                        self.processes[process_name]["errors"] = f"Permission denied setting real-time priority."
+                        self.processes[process_name]["errors"] = "Permission denied setting real-time priority."
                     except Exception as e:
                         logging.error(f"Start Process: Failed to set real-time priority for process {process_name}: {e}")
                         self.processes[process_name]["errors"] = str(e)
@@ -287,6 +287,7 @@ class DPMAgent:
                 proc_info["state"] = STATE_FAILED
                 proc_info["exit_code"] = proc.poll()
                 proc_info["proc"] = None
+                proc_info["errors"] = "Process stopped unexpectedly."
 
                 if proc_info["restart"]:
                     logging.info(f"Monitor Process: Restarting process {process_name}.")
@@ -377,7 +378,6 @@ class DPMAgent:
 
             msg.procs.append(msg_proc)
             msg.num_procs += 1
-            proc_info["Errors"] = ""
         self.lc.publish(self.host_procs_channel, msg.encode())
 
     def publish_procs_outputs(self):
