@@ -1,9 +1,9 @@
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem
 
 class HostsPanel(QWidget):
-    def __init__(self, master):
+    def __init__(self, controller):
         super().__init__()
-        self.master = master
+        self.controller = controller
         self.init_ui()
 
     def init_ui(self):
@@ -20,6 +20,12 @@ class HostsPanel(QWidget):
 
     def update_hosts(self):
         self.hosts_list.clear()
-        for host, status in self.master.hosts.items():
-            item = QListWidgetItem(f"{host}: {'Online' if status['online'] else 'Offline'}")
+        # controller.hosts is dict hostname -> host_info_t
+        for host, info in self.controller.hosts.items():
+            # show simple online indicator and ip/cpu if available
+            ip = getattr(info, "ip", None)
+            cpu = getattr(info, "cpu_usage", None)
+            cpu_str = f" CPU:{int(cpu*100)}%" if cpu is not None else ""
+            ip_str = f" {ip}" if ip else ""
+            item = QListWidgetItem(f"{host}:{ip_str}{cpu_str} - Online")
             self.hosts_list.addItem(item)

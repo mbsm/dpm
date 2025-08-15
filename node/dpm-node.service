@@ -1,0 +1,30 @@
+[Unit]
+Description=DPM Node Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as a dedicated user (recommended). If you prefer root, uncomment User=root
+# Replace 'dpmuser' with a real user configured on the host for better security.
+# User=dpmuser
+# Group=dpmuser
+
+# If you need real-time priorities without running as root, add:
+# AmbientCapabilities=CAP_SYS_NICE
+
+# Working directory for the node implementation (update if your repo is elsewhere)
+WorkingDirectory=/home/mbustos/dpm/node
+
+# Command to execute the node (uses env to pick the active python3)
+ExecStart=/usr/bin/env python3 /home/mbustos/dpm/node/node.py
+
+# Restart behavior
+Restart=on-failure
+RestartSec=5
+
+# Log to journal
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

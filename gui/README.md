@@ -2,7 +2,7 @@
 
 A Qt-based GUI for DPM that connects to the Master backend and displays hosts and processes.
 
-Entry point: [dpm-pyqt5-gui/src/main.py](src/main.py)
+Entry point: [gui/src/main.py](src/main.py)
 
 ```python
 # Excerpt
@@ -20,7 +20,7 @@ def main():
 
 ## Run
 ```bash
-python3 dpm-pyqt5-gui/src/main.py
+python3 gui/src/main.py
 ```
 
 ## Dependencies

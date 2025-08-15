@@ -1,9 +1,9 @@
 from PyQt5 import QtWidgets, QtCore
 
 class ProcessForm(QtWidgets.QWidget):
-    def __init__(self, master, process=None):
+    def __init__(self, controller, process=None):
         super().__init__()
-        self.master = master
+        self.controller = controller
         self.process = process
         self.init_ui()
 
@@ -51,10 +51,10 @@ class ProcessForm(QtWidgets.QWidget):
     def load_process_data(self):
         self.name_input.setText(self.process.name)
         self.command_input.setText(self.process.cmd)
-        self.group_input.setText(self.process.group)
-        self.host_input.setText(self.process.hostname)
-        self.auto_restart_checkbox.setChecked(self.process.auto_restart)
-        self.realtime_checkbox.setChecked(self.process.realtime)
+        self.group_input.setText(getattr(self.process, "group", ""))
+        self.host_input.setText(getattr(self.process, "hostname", ""))
+        self.auto_restart_checkbox.setChecked(getattr(self.process, "auto_restart", False))
+        self.realtime_checkbox.setChecked(getattr(self.process, "realtime", False))
 
     def submit(self):
         name = self.name_input.text().strip()
@@ -68,9 +68,17 @@ class ProcessForm(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Input Error", "Please fill in all required fields.")
             return
 
-        if self.process:
-            self.master.update_process(self.process, name, command, group, host, auto_restart, realtime)
-        else:
-            self.master.create_process(name, command, group, host, auto_restart, realtime)
+        try:
+            if self.process:
+                old_name = getattr(self.process, "name", None)
+                old_host = getattr(self.process, "hostname", host)
+                if old_name:
+                    self.controller.del_proc(old_name, old_host)
+                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+            else:
+                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to submit process: {e}")
+            return
 
         self.close()
