@@ -70,7 +70,7 @@ def stream_reader(stream, output_list):
         logging.error(f"Stream Reader: Error reading stream: {e}")
 
 
-class DPMAgent:
+class NodeAgent:
     def __init__(self, config_file="../dpm.yaml"):
         current_dir = os.path.dirname(os.path.realpath(__file__))
         config_path = os.path.join(current_dir, config_file)
@@ -413,5 +413,5 @@ class DPMAgent:
 
 
 if __name__ == "__main__":
-    agent = DPMAgent()
+    agent = NodeAgent()
     agent.run()

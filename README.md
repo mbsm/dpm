@@ -7,7 +7,7 @@ DPM is a lightweight distributed process manager that communicates over LCM (Lig
 
 Core classes/files:
 - [`master.DPM_Master`](master/master.py)
-- [`agent.DPMAgent`](agent/agent.py)
+- [`agent.NodeAgent`](agent/agent.py)
 - TUI: [master/dpm.py](master/dpm.py)
 - PyQt5 GUI entrypoint: [dpm-pyqt5-gui/src/main.py](dpm-pyqt5-gui/src/main.py)
 
@@ -77,7 +77,7 @@ Notes:
 The curses TUI lives in [master/dpm.py](master/dpm.py). Some UI functions (e.g., output viewer) are placeholders.
 
 ### Agent
-- Class: [`agent.DPMAgent`](agent/agent.py)
+- Class: [`agent.NodeAgent`](agent/agent.py)
 - Responsibilities:
   - Receives commands (create/start/stop/delete/start_group/stop_group).
   - Spawns and monitors processes.

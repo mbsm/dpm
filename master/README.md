@@ -35,7 +35,7 @@ This script defines the `DPM_Master` class, which encapsulates the core function
 *   **Initialization:**
     *   Loads configuration from `dpm.yaml` (specified by `CONFIG_PATH` in `dpm.py`).
     *   Initializes LCM communication using the URL and channels defined in the config.
-    *   Subscribes to LCM channels (`host_info_channel`, `host_procs_channel`, `proc_outputs_channel`) to receive messages from agents.
+    *   Subscribes to LCM channels (`host_info_channel`, `host_procs_channel`, `proc_outputs_channel`) to receive messages from nodes.
 *   **LCM Handling:**
     *   Runs a background thread (`_thread_func`) to continuously handle incoming LCM messages using `lc.handle_timeout()`.
     *   Message handlers (`host_info_handler`, `host_procs_handler`, `proc_outputs_handler`) decode incoming messages and update the master's internal state (`_hosts`, `_procs`, `_proc_outputs`).

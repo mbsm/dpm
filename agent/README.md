@@ -3,7 +3,7 @@
 The DPM Agent runs on each host, receives commands over LCM, manages local processes, and publishes host/process status and outputs.
 
 Core files:
-- Agent: [`agent.DPMAgent`](agent/agent.py)
+- Agent: [`agent.NodeAgent`](agent/agent.py)
 - Systemd unit: [agent/dpm-agent.service](agent/dpm-agent.service)
 - Installer: [agent/install_dpm_agent.sh](agent/install_dpm_agent.sh)
 
