@@ -4,10 +4,14 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(__file__))
+
+# New config path at repo root
+CONFIG_PATH = "dpm.yaml"
+
+# Ensure controller package is importable when running from repo root
 from controller import Controller
 
 REPORT_THRESHOLD = 5  # number of seconds after which host is considered offline
-CONFIG_PATH = "../dpm.yaml"  # update this to your config path
 
 def draw_hosts_panel(win, hosts):
     """
@@ -715,14 +719,13 @@ def show_process_output(stdscr, master, proc_name):
     
 
 def main(stdscr):
-    # Initialize DPM_Master
+    # Initialize Controller
     try:
-        master = Controller(CONFIG_PATH)
-         # Start the LCM handling thread
-         master.start()
+        controller = Controller(CONFIG_PATH)
+        controller.start()
     except Exception as e:
-        return f"Error initializing DPM_Master: {e}"
-    
+        return f"Error initializing Controller: {e}"
+
     # Clear screen and initialize colors
     curses.curs_set(0)
     stdscr.nodelay(True)  # non-blocking input

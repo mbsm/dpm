@@ -89,7 +89,7 @@ pip install pyyaml lcm
 The master relies on the main `dpm.yaml` file located one level above the `master` directory (path defined by `CONFIG_PATH` in `dpm.py`). Ensure this file exists and contains the correct LCM channel names and URL.
 
 ```python
-# master/dpm.py
+# dpm.py
 CONFIG_PATH = "../dpm.yaml"
 ```
 

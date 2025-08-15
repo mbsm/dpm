@@ -8,7 +8,7 @@ DPM is a lightweight distributed process manager that communicates over LCM (Lig
 Core classes/files:
 - [`master.DPM_Master`](master/master.py)
 - [`agent.NodeAgent`](agent/agent.py)
-- TUI: [master/dpm.py](master/dpm.py)
+- TUI: [dpm.py](dpm.py)
 - PyQt5 GUI entrypoint: [dpm-pyqt5-gui/src/main.py](dpm-pyqt5-gui/src/main.py)
 
 ## Project layout
@@ -74,7 +74,7 @@ Notes:
 - Thread-safe views:
   - .hosts, .procs, .proc_outputs
 
-The curses TUI lives in [master/dpm.py](master/dpm.py). Some UI functions (e.g., output viewer) are placeholders.
+The curses TUI lives in [dpm.py](dpm.py). Some UI functions (e.g., output viewer) are placeholders.
 
 ### Agent
 - Class: [`agent.NodeAgent`](agent/agent.py)
@@ -136,7 +136,7 @@ python3 dpm-pyqt5-gui/src/main.py
 Make sure [dpm-pyqt5-gui/src/main.py](dpm-pyqt5-gui/src/main.py) uses the correct config path (e.g., /home/mbustos/dpm/dpm.yaml).
 
 - Curses TUI:
-  - The TUI exists in [master/dpm.py](master/dpm.py); some UI functions are placeholders and may need completion before use.
+  - The TUI exists in [dpm.py](dpm.py); some UI functions are placeholders and may need completion before use.
 
 ## Troubleshooting
 
