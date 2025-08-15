@@ -6,13 +6,17 @@ from PyQt5.QtWidgets import QApplication
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../master')))
 from master import DPM_Master
 
+# Add the controller directory to sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../controller')))
+from controller import Controller
+
 from gui.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
-    master = DPM_Master("/home/mbustos/dpm/dpm.yaml")
-    master.start()
-    window = MainWindow(master)
+    controller = Controller("/home/mbustos/dpm/dpm.yaml")
+    controller.start()
+    window = MainWindow(controller)
     window.show()
     sys.exit(app.exec_())
 

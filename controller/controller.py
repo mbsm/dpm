@@ -15,7 +15,7 @@ from dpm_msg import (
 )
 
 
-class DPM_Master:
+class Controller:
     def __init__(self, config_path):
         # load configuration
         self.config = self.load_config(config_path)
@@ -29,7 +29,7 @@ class DPM_Master:
         lc_url = self.config["lcm_url"]
         self.lc = lcm.LCM(lc_url)
         
-        #subscribe to the host_info_channel, proc_outputs_channel and host_procs_channel
+        # subscribe to the host_info_channel, proc_outputs_channel and host_procs_channel
         self.s1 = self.lc.subscribe(self.host_info_channel, self.host_info_handler)
         self.s2 = self.lc.subscribe(self.host_procs_channel, self.host_procs_handler)
         self.s3 = self.lc.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
@@ -197,8 +197,3 @@ class DPM_Master:
     def update(self):
         """Legacy method kept for compatibility; does nothing now that the thread handles updates"""
         pass  # The thread is now handling updates
-
-
-
-
-

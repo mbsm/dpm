@@ -4,7 +4,7 @@ import os
 import sys
 
 sys.path.append(os.path.dirname(__file__))
-from master import DPM_Master
+from controller import Controller
 
 REPORT_THRESHOLD = 5  # number of seconds after which host is considered offline
 CONFIG_PATH = "../dpm.yaml"  # update this to your config path
@@ -240,7 +240,7 @@ def show_create_process_form(stdscr, master):
     # Form fields - increased width for command
     fields = [
         {"name": "Process Name", "value": "", "type": "text", "y": 2, "x": 3, "width": 40},
-        {"name": "Process Command", "value": "", "type": "text", "y": 3, "x": 3, "width": 120},  # Increased width
+        {"name": "Process Command", "value": "", "type": "text", "y": 3, "x": 3, "width": 120},  # Increased width for longer commands
         {"name": "Group", "value": "", "type": "text", "y": 4, "x": 3, "width": 30},
         {"name": "Host", "value": "", "type": "text", "y": 5, "x": 3, "width": 30},
         {"name": "Auto Restart", "value": False, "type": "bool", "y": 6, "x": 3},
@@ -717,9 +717,9 @@ def show_process_output(stdscr, master, proc_name):
 def main(stdscr):
     # Initialize DPM_Master
     try:
-        master = DPM_Master(CONFIG_PATH)
-        # Start the LCM handling thread
-        master.start()
+        master = Controller(CONFIG_PATH)
+         # Start the LCM handling thread
+         master.start()
     except Exception as e:
         return f"Error initializing DPM_Master: {e}"
     

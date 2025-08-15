@@ -7,8 +7,8 @@ This directory contains the master node implementation for the Distributed Proce
 ## **Table of Contents**
 1.  Overview
 2.  Components
-    *   `master.py`: Core Master Logic
-    *   `dpm.py`: Terminal User Interface (TUI)
+    *   `controller/controller.py`: Core Controller Logic
+    *   `dpm.py`: Terminal User Interface (TUI) — now instantiates `controller.Controller`
 3.  Dependencies
 4.  Configuration
 5.  Usage
@@ -28,9 +28,9 @@ The DPM Master acts as the central hub in the DPM system. It:
 
 ## **2. Components**
 
-### **`master.py`**: Core Master Logic
+### **`controller/controller.py`**: Core Controller Logic
 
-This script defines the `DPM_Master` class, which encapsulates the core functionality of the master node.
+This script defines the `Controller` class, which encapsulates the core functionality of the master node.
 
 *   **Initialization:**
     *   Loads configuration from `dpm.yaml` (specified by `CONFIG_PATH` in `dpm.py`).
