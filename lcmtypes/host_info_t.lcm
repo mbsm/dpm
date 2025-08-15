@@ -1,4 +1,4 @@
-package dpm_msg;
+package dpm_msgs;
 struct host_info_t
 {
     int64_t timestamp; // usecs from unix epoch

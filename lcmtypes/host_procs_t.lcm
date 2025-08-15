@@ -1,4 +1,4 @@
-package dpm_msg;
+package dpm_msgs;
 
 struct host_procs_t 
 {

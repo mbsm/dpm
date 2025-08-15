@@ -1,0 +1,24 @@
+2025-08-15 10:48:08,672 - root - INFO - Host initialized with channels: command=DPM/commands, info=DPM/host_info
+2025-08-15 10:48:08,672 - root - INFO - Host running.
+2025-08-15 10:48:31,999 - root - INFO - Command handler: Received command: create_process for process: ./test
+2025-08-15 10:48:32,000 - root - INFO - Create Process: Created process: Test with command: ./test auto_restart: False and realtime: False
+2025-08-15 10:48:38,215 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 10:48:38,215 - root - INFO - Start Process: Starting process: Test with command: ./test
+2025-08-15 10:48:38,216 - root - ERROR - Start Process: Failed to start process Test: [Errno 2] No such file or directory: './test'
+2025-08-15 10:48:51,718 - root - INFO - Command handler: Received command: delete_process for process: 
+2025-08-15 10:48:51,719 - root - INFO - Delete Process: Deleted process: Test
+2025-08-15 10:49:53,356 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/ukf_node
+2025-08-15 10:49:53,356 - root - INFO - Create Process: Created process: UKF Node with command: /home/mbustos/agv1/nodes/bin/ukf_node auto_restart: False and realtime: False
+2025-08-15 10:50:27,020 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/planner_node
+2025-08-15 10:50:27,020 - root - INFO - Create Process: Created process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node auto_restart: False and realtime: False
+2025-08-15 10:51:12,373 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/navigator_node
+2025-08-15 10:51:12,374 - root - INFO - Create Process: Created process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node auto_restart: False and realtime: False
+2025-08-15 10:51:29,372 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 10:51:29,372 - root - INFO - Start Process: Starting process: UKF Node with command: /home/mbustos/agv1/nodes/bin/ukf_node
+2025-08-15 10:51:29,376 - root - INFO - Start Process: Started process: UKF Node with PID 73258
+2025-08-15 10:51:33,980 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 10:51:33,980 - root - INFO - Start Process: Starting process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node
+2025-08-15 10:51:33,984 - root - INFO - Start Process: Started process: Planner Node with PID 73320
+2025-08-15 10:51:36,795 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 10:51:36,795 - root - INFO - Start Process: Starting process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node
+2025-08-15 10:51:36,799 - root - INFO - Start Process: Started process: Navigator Node with PID 73361

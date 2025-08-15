@@ -1,0 +1,27 @@
+2025-08-15 11:54:17,920 - root - INFO - Host initialized with channels: command=DPM/commands, info=DPM/host_info
+2025-08-15 11:54:17,920 - root - INFO - Host running.
+2025-08-15 11:54:22,258 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/navigator_node
+2025-08-15 11:54:22,258 - root - INFO - Create Process: Created process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,259 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/planner_node
+2025-08-15 11:54:22,259 - root - INFO - Create Process: Created process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,259 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/motion_controller_node
+2025-08-15 11:54:22,259 - root - INFO - Create Process: Created process: Motion Controller Node with command: /home/mbustos/agv1/nodes/bin/motion_controller_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,259 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/ukf_node
+2025-08-15 11:54:22,259 - root - INFO - Create Process: Created process: UKF Node with command: /home/mbustos/agv1/nodes/bin/ukf_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,259 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/obstacle_detection_node
+2025-08-15 11:54:22,260 - root - INFO - Create Process: Created process: Obstacle Detection Node with command: /home/mbustos/agv1/nodes/bin/obstacle_detection_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,260 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/vlp16_node
+2025-08-15 11:54:22,260 - root - INFO - Create Process: Created process: VLP 16 Node with command: /home/mbustos/agv1/nodes/bin/vlp16_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,260 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/gx5_ahrs_node
+2025-08-15 11:54:22,260 - root - INFO - Create Process: Created process: Ahrs Node with command: /home/mbustos/agv1/nodes/bin/gx5_ahrs_node auto_restart: False and realtime: False
+2025-08-15 11:54:22,260 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/simulator_node
+2025-08-15 11:54:22,260 - root - INFO - Create Process: Created process: Simulator Node with command: /home/mbustos/agv1/nodes/bin/simulator_node auto_restart: False and realtime: False
+2025-08-15 11:54:46,781 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 11:54:46,782 - root - INFO - Start Process: Starting process: VLP 16 Node with command: /home/mbustos/agv1/nodes/bin/vlp16_node
+2025-08-15 11:54:46,788 - root - INFO - Start Process: Started process: VLP 16 Node with PID 90614
+2025-08-15 11:54:54,901 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 11:54:54,901 - root - INFO - Start Process: Process VLP 16 Node is already running with PID 90614. Skipping start.
+2025-08-15 11:54:57,524 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 11:54:57,524 - root - INFO - Start Process: Starting process: Ahrs Node with command: /home/mbustos/agv1/nodes/bin/gx5_ahrs_node
+2025-08-15 11:54:57,526 - root - INFO - Start Process: Started process: Ahrs Node with PID 90700
+2025-08-15 11:54:57,928 - root - WARNING - Monitor Process: Process Ahrs Node found stopped.

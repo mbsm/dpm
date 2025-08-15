@@ -1,40 +1,26 @@
-# DPM PyQt5 GUI
+# DPM GUI
 
-A Qt-based GUI for DPM that connects to the Master backend and displays hosts and processes.
+The GUI is a PyQt5-based frontend for DPM. It connects to a local Controller instance (reads configuration from `dpm.yaml` in the repository root).
 
-Entry point: [gui/src/main.py](src/main.py)
-
-```python
-# Excerpt
-from PyQt5.QtWidgets import QApplication
-from master import DPM_Master
-
-def main():
-    app = QApplication(sys.argv)
-    master = DPM_Master("/home/mbustos/dpm/dpm.yaml")  # Ensure this path is correct
-    master.start()
-    window = MainWindow(master)
-    window.show()
-    sys.exit(app.exec_())
-```
-
-## Run
+Quick start
+- From repository root:
 ```bash
-python3 gui/src/main.py
+python3 dpm-gui.py
 ```
-
-## Dependencies
-- PyQt5, PyYAML, python3-lcm, psutil
-- Install:
+- Or run the package entrypoint:
 ```bash
-pip install PyQt5 pyyaml psutil
-sudo apt-get install -y lcm liblcm-dev python3-lcm
-# Optional GTK warning fix:
-sudo apt-get install -y libcanberra-gtk-module libcanberra-gtk3-module
+python3 gui/main.py
 ```
 
-## Troubleshooting
-- TypeError: MainWindow.__init__() missing 1 required positional argument: 'dpm_master'
-  - Pass the DPM_Master instance to MainWindow as shown above.
-- FileNotFoundError for config:
-  - Update the DPM_Master config path to your actual /home/mbustos/dpm/dpm.yaml.
+Requirements
+- PyQt5: pip install PyQt5
+- Other runtime dependencies: psutil, pyyaml (Controller uses these)
+
+Behavior
+- The GUI instantiates a `controller.Controller` (config path defaults to repo root `dpm.yaml`) and displays hosts, processes, and process output.
+- Actions available: create/edit/delete processes, start/stop processes, view process output.
+
+Notes
+- The GUI requires PyQt5 only; Nodes do not require GUI packages.
+- If you see GTK warnings on start, install:
+  sudo apt-get install -y libcanberra-gtk-module libcanberra-gtk3-module

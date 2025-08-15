@@ -1,0 +1,65 @@
+#navigator node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/navigator_node
+  group: Planning
+  host: HP-Z820-Workstation
+  name: Navigator Node
+  realtime: false
+
+#planner node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/planner_node
+  group: Planning
+  host: HP-Z820-Workstation
+  name: Planner Node
+  realtime: false
+
+#Motion Controller Node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/motion_controller_node
+  group: Planning
+  host: HP-Z820-Workstation
+  name: Motion Controller Node
+  realtime: false
+
+#UKF Node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/ukf_node
+  group: Perception
+  host: HP-Z820-Workstation
+  name: UKF Node
+  realtime: false
+
+#Obstacle Detection Node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/obstacle_detection_node
+  group: Perception
+  host: HP-Z820-Workstation
+  name: Obstacle Detection Node
+  realtime: false
+
+#VLP 16 Node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/vlp16_node
+  group: Sensors
+  host: HP-Z820-Workstation
+  name: VLP 16 Node
+  realtime: false
+
+#Ahrs Node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/gx5_ahrs_node
+  group: Sensors
+  host: HP-Z820-Workstation
+  name: Ahrs Node
+  realtime: false
+
+#simulator node
+- auto_restart: false
+  command: /home/mbustos/agv1/nodes/bin/simulator_node
+  group: Simulation
+  host: HP-Z820-Workstation
+  name: Simulator Node
+  realtime: false 
+
+

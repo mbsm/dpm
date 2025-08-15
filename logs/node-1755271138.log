@@ -1,0 +1,12 @@
+2025-08-15 11:18:58,307 - root - INFO - Host initialized with channels: command=DPM/commands, info=DPM/host_info
+2025-08-15 11:18:58,307 - root - INFO - Host running.
+2025-08-15 11:19:33,699 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/planner_node
+2025-08-15 11:19:33,699 - root - INFO - Create Process: Created process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node auto_restart: False and realtime: False
+2025-08-15 11:20:12,743 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/navigator_node
+2025-08-15 11:20:12,744 - root - INFO - Create Process: Created process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node auto_restart: False and realtime: False
+2025-08-15 11:20:22,945 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 11:20:22,945 - root - INFO - Start Process: Starting process: Planner Node with command: /home/mbustos/agv1/nodes/bin/planner_node
+2025-08-15 11:20:22,948 - root - INFO - Start Process: Started process: Planner Node with PID 82540
+2025-08-15 11:20:27,746 - root - INFO - Command handler: Received command: start_process for process: 
+2025-08-15 11:20:27,746 - root - INFO - Start Process: Starting process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node
+2025-08-15 11:20:27,749 - root - INFO - Start Process: Started process: Navigator Node with PID 82602

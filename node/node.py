@@ -18,7 +18,7 @@ STATE_FAILED = "F"
 STATE_KILLED = "K"
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from dpm_msg import (
+from dpm_msgs import (
     command_t,
     host_info_t,
     host_procs_t,

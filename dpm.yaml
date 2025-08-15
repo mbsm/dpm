@@ -12,6 +12,7 @@ monitor_interval: 1
 output_interval: 1
 host_status_interval: 1
 procs_status_interval: 1
+report_threshold: 5
 
 #timeout in s for stopping a process
 stop_timeout: 2
