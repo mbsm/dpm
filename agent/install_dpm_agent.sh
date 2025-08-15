@@ -43,16 +43,73 @@ install_service() {
     fi
     # --- End Dependency Install ---
 
-
     # Check if source service file exists
     if [ ! -f "${SOURCE_PATH}" ]; then
         echo "ERROR: Source service file not found at ${SOURCE_PATH}"
         exit 1
     fi
 
-    # Copy the service file
-    echo "Copying ${SOURCE_PATH} to ${DEST_PATH}..."
-    cp "${SOURCE_PATH}" "${DEST_PATH}"
+    # --- Ask user for agent path and build ExecStart ---
+    DEFAULT_AGENT_DIR="${SOURCE_DIR}"
+    echo ""
+    echo "Detected agent directory: ${DEFAULT_AGENT_DIR}"
+    read -r -p "Use this directory for WorkingDirectory and ExecStart? [Y/n]: " yn
+    yn=${yn:-Y}
+    case "$yn" in
+        [Nn]*)
+            read -r -p "Enter full path to the agent directory (must contain agent.py): " AGENT_DIR
+            ;;
+        *)
+            AGENT_DIR="${DEFAULT_AGENT_DIR}"
+            ;;
+    esac
+
+    # Validate agent directory
+    if [ ! -d "${AGENT_DIR}" ] || [ ! -f "${AGENT_DIR}/agent.py" ]; then
+        echo "ERROR: '${AGENT_DIR}' is not valid or agent.py not found."
+        exit 1
+    fi
+
+    EXEC_START="/usr/bin/env python3 ${AGENT_DIR}/agent.py"
+    echo "Using:"
+    echo "  WorkingDirectory=${AGENT_DIR}"
+    echo "  ExecStart=${EXEC_START}"
+    echo ""
+
+    # Create a temp copy of the unit and modify it
+    TMP_UNIT="$(mktemp)"
+    cp "${SOURCE_PATH}" "${TMP_UNIT}"
+
+    # Replace or insert WorkingDirectory and ExecStart inside [Service] section
+    # 1) Try to replace existing lines
+    sed -i "s|^WorkingDirectory=.*$|WorkingDirectory=${AGENT_DIR}|g" "${TMP_UNIT}"
+    sed -i "s|^ExecStart=.*$|ExecStart=${EXEC_START}|g" "${TMP_UNIT}"
+
+    # 2) If not present, insert after [Service]
+    if ! grep -q '^WorkingDirectory=' "${TMP_UNIT}"; then
+        sed -i "/^\[Service\]/a WorkingDirectory=${AGENT_DIR}" "${TMP_UNIT}"
+    fi
+    if ! grep -q '^ExecStart=' "${TMP_UNIT}"; then
+        sed -i "/^\[Service\]/a ExecStart=${EXEC_START}" "${TMP_UNIT}"
+    fi
+
+    echo "Preview of modified unit (first 30 lines):"
+    head -n 30 "${TMP_UNIT}" | sed 's/^/  /'
+    echo ""
+    read -r -p "Proceed with installation? [Y/n]: " proceed
+    proceed=${proceed:-Y}
+    case "$proceed" in
+        [Nn]*)
+            echo "Aborted by user."
+            rm -f "${TMP_UNIT}"
+            exit 1
+            ;;
+    esac
+
+    # Copy the modified unit into place
+    echo "Copying modified unit to ${DEST_PATH}..."
+    cp "${TMP_UNIT}" "${DEST_PATH}"
+    rm -f "${TMP_UNIT}"
     if [ $? -ne 0 ]; then
         echo "ERROR: Failed to copy service file."
         exit 1

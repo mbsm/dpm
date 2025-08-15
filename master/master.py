@@ -75,15 +75,28 @@ class DPM_Master:
         # decode the message
         msg = host_info_t.decode(data)
 
-        # update the hosts data with thread safety
         with self._hosts_lock:
             self._hosts[msg.hostname] = msg
+
     
     def host_procs_handler(self, channel, data):
         msg = host_procs_t.decode(data)
+        
         with self._procs_lock:
-            for proc in msg.procs:
-                self._procs[proc.name] = proc
+            # First, identify and remove processes from this host that aren't in the new message
+            hostname = msg.hostname
+            # Get all process names from this host
+            host_procs = [name for name, proc in self._procs.items() if proc.hostname == hostname]
+            # Get process names from the new message
+            new_proc_names = [proc.name for proc in msg.procs]
+            # Remove processes that no longer exist
+            for proc_name in host_procs:
+                if proc_name not in new_proc_names:
+                    del self._procs[proc_name]
+        
+        # Now update with the current processes
+        for proc in msg.procs:
+            self._procs[proc.name] = proc
     
     def proc_outputs_handler(self, channel, data):
         msg = proc_output_t.decode(data)
@@ -113,6 +126,13 @@ class DPM_Master:
         msg.name = cmd_name
         msg.hostname = host
         msg.command = "stop_process"
+        self.lc.publish(self.command_channel, msg.encode())
+        
+    def del_proc(self, cmd_name, host):
+        msg = command_t()
+        msg.name = cmd_name
+        msg.hostname = host
+        msg.command = "delete_process"
         self.lc.publish(self.command_channel, msg.encode())
     
     def start_group(self, group, host):

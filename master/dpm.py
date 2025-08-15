@@ -230,7 +230,7 @@ def show_create_process_form(stdscr, master):
     screen_height, screen_width = stdscr.getmaxyx()
     
     # Create form window (centered) - increased width for longer commands
-    form_height, form_width = 16, 80
+    form_height, form_width = 16, 140  # Increased width for longer commands
     form_y = (screen_height - form_height) // 2
     form_x = (screen_width - form_width) // 2
     
@@ -240,7 +240,7 @@ def show_create_process_form(stdscr, master):
     # Form fields - increased width for command
     fields = [
         {"name": "Process Name", "value": "", "type": "text", "y": 2, "x": 3, "width": 40},
-        {"name": "Process Command", "value": "", "type": "text", "y": 3, "x": 3, "width": 70}, # Much wider command field
+        {"name": "Process Command", "value": "", "type": "text", "y": 3, "x": 3, "width": 120},  # Increased width
         {"name": "Group", "value": "", "type": "text", "y": 4, "x": 3, "width": 30},
         {"name": "Host", "value": "", "type": "text", "y": 5, "x": 3, "width": 30},
         {"name": "Auto Restart", "value": False, "type": "bool", "y": 6, "x": 3},
@@ -396,10 +396,11 @@ def show_process_dialog(stdscr, master, proc):
     # Get screen dimensions
     screen_height, screen_width = stdscr.getmaxyx()
     
-    # Create dialog window (centered)
-    dialog_height, dialog_width = 24, 80
-    dialog_y = (screen_height - dialog_height) // 2
-    dialog_x = (screen_width - dialog_width) // 2
+    # Create dialog window (centered) - ensure it fits within screen
+    dialog_height = min(24, screen_height - 2)  # Leave room for borders
+    dialog_width = min(80, screen_width - 2)    # Leave room for borders
+    dialog_y = max(0, (screen_height - dialog_height) // 2)
+    dialog_x = max(0, (screen_width - dialog_width) // 2)
     
     dialog_win = curses.newwin(dialog_height, dialog_width, dialog_y, dialog_x)
     dialog_win.keypad(True)  # Enable keypad for input
@@ -415,6 +416,7 @@ def show_process_dialog(stdscr, master, proc):
         options.append("Stop Process")
     options.append("Edit Process")
     options.append("View Output")  # New option for viewing output
+    options.append("Delete Process")  # Add Delete Process option
     options.append("Cancel")
     
     selected_option = 0
@@ -428,29 +430,43 @@ def show_process_dialog(stdscr, master, proc):
         dialog_win.addstr(0, 2, f"Process: {proc.name}")
         dialog_win.attroff(curses.A_BOLD)
         
-        # Display process attributes
+        # Display process attributes - more compact with multiple per row
+        # Row 1
         dialog_win.addstr(2, 2, f"Group: {proc.group}")
-        dialog_win.addstr(3, 2, f"Host: {proc.hostname}")
-        dialog_win.addstr(4, 2, f"State: {proc.state}")
-        dialog_win.addstr(5, 2, f"Status: {proc.status}")
-        dialog_win.addstr(6, 2, f"Errors: {proc.errors}")
-        dialog_win.addstr(7, 2, f"Command: {proc.cmd}")
-        dialog_win.addstr(8, 2, f"CPU Usage: {proc.cpu * 100:.1f}%")
-        dialog_win.addstr(9, 2, f"Memory RSS: {proc.mem_rss} KB")
-        dialog_win.addstr(10, 2, f"Memory VMS: {proc.mem_vms} KB")
-        dialog_win.addstr(11, 2, f"Priority: {proc.priority}")
-        dialog_win.addstr(12, 2, f"PID: {proc.pid}")
-        dialog_win.addstr(13, 2, f"PPID: {proc.ppid}")
-        dialog_win.addstr(14, 2, f"Auto Restart: {'Yes' if proc.auto_restart else 'No'}")
-        dialog_win.addstr(15, 2, f"Realtime: {'Yes' if proc.realtime else 'No'}")
-        dialog_win.addstr(16, 2, f"Exit Code: {proc.exit_code}")
-        dialog_win.addstr(17, 2, f"Runtime: {proc.runtime} seconds")
+        dialog_win.addstr(2, 40, f"Host: {proc.hostname}")
+        
+        # Row 2
+        dialog_win.addstr(3, 2, f"State: {proc.state}")
+        dialog_win.addstr(3, 40, f"Status: {proc.status}")
+        
+        # Row 3
+        dialog_win.addstr(4, 2, f"CPU: {proc.cpu * 100:.1f}%")
+        dialog_win.addstr(4, 40, f"MEM: {proc.mem_rss} KB")
+        
+        # Row 4
+        dialog_win.addstr(5, 2, f"PID: {proc.pid}")
+        dialog_win.addstr(5, 40, f"PPID: {proc.ppid}")
+        
+        # Row 5
+        dialog_win.addstr(6, 2, f"Auto Restart: {'Yes' if proc.auto_restart else 'No'}")
+        dialog_win.addstr(6, 40, f"Realtime: {'Yes' if proc.realtime else 'No'}")
+        
+        # Row 6
+        dialog_win.addstr(7, 2, f"Exit Code: {proc.exit_code}")
+        dialog_win.addstr(7, 40, f"Runtime: {proc.runtime} seconds")
+        
+        # Row 7
+        dialog_win.addstr(8, 2, f"Errors: {proc.errors}")
+        
+        # Row 8 - Command needs a full row due to potential length
+        dialog_win.addstr(9, 2, f"Command: {proc.cmd[:dialog_width-12]}")
         
         # Draw options
+        option_start_row = 11 # Starting the options lower to account for command display
         for i, option in enumerate(options):
             if i == selected_option:
                 dialog_win.attron(curses.A_REVERSE)
-            dialog_win.addstr(dialog_height - 4 + i, 2, f"[{i+1}] {option}")
+            dialog_win.addstr(option_start_row + i, 2, f"[{i+1}] {option}")
             if i == selected_option:
                 dialog_win.attroff(curses.A_REVERSE)
         
@@ -476,6 +492,9 @@ def show_process_dialog(stdscr, master, proc):
                 break
             elif options[selected_option] == "View Output":
                 show_process_output(stdscr, master, proc.name)  # Call the new function
+                break
+            elif options[selected_option] == "Delete Process":
+                master.del_proc(proc.name, proc.hostname)
                 break
             else:  # Cancel
                 break
@@ -506,7 +525,7 @@ def show_edit_process_form(stdscr, master, proc):
     # Form fields pre-populated with process data - increased width for command
     fields = [
         {"name": "Process Name", "value": proc.name, "type": "text", "y": 2, "x": 3, "width": 40},
-        {"name": "Process Command", "value": proc.cmd, "type": "text", "y": 3, "x": 3, "width": 70}, # Much wider command field
+        {"name": "Process Command", "value": proc.cmd, "type": "text", "y": 3, "x": 3, "width": 120}, # Much wider command field
         {"name": "Group", "value": proc.group, "type": "text", "y": 4, "x": 3, "width": 30},
         {"name": "Host", "value": proc.hostname, "type": "text", "y": 5, "x": 3, "width": 30},
         {"name": "Auto Restart", "value": proc.auto_restart, "type": "bool", "y": 6, "x": 3},
@@ -666,58 +685,34 @@ def show_process_output(stdscr, master, proc_name):
     """
     Display the stdout and stderr of a selected process in a new panel.
     """
+    pass  # Placeholder for process output display logic
+    # This function would need to handle the output display logic
+    # and possibly include scrolling functionality if the output is long.
+    # For now, we can just print a message indicating the function is not implemented.
+
     # Save current cursor visibility
     old_cursor = curses.curs_set(0)
-    
     # Get screen dimensions
     screen_height, screen_width = stdscr.getmaxyx()
-    
     # Create output window (centered)
-    output_height, output_width = screen_height - 4, screen_width - 4
-    output_y = 2
-    output_x = 2
-    
+    output_height, output_width = 20, 80
+    output_y = (screen_height - output_height) // 2
+    output_x = (screen_width - output_width) // 2
     output_win = curses.newwin(output_height, output_width, output_y, output_x)
     output_win.keypad(True)  # Enable keypad for input
-    
-    while True:
-        output_win.clear()
-        output_win.box()
-        
-        # Draw title
-        output_win.attron(curses.A_BOLD)
-        output_win.addstr(0, 2, f"Process Output: {proc_name}")
-        output_win.attroff(curses.A_BOLD)
-        
-        # Fetch process output
-        proc_output = master.get_proc_output(proc_name)
-        if proc_output:
-            # Display stdout
-            output_win.addstr(2, 2, "STDOUT:")
-            stdout_lines = proc_output.stdout.splitlines()
-            for i, line in enumerate(stdout_lines[:output_height - 6]):
-                output_win.addstr(3 + i, 4, line[:output_width - 6])
-            
-            # Display stderr
-            stderr_start = 3 + len(stdout_lines[:output_height - 6]) + 1
-            output_win.addstr(stderr_start, 2, "STDERR:")
-            stderr_lines = proc_output.stderr.splitlines()
-            for i, line in enumerate(stderr_lines[:output_height - stderr_start - 3]):
-                output_win.addstr(stderr_start + 1 + i, 4, line[:output_width - 6])
-        else:
-            output_win.addstr(2, 2, "No output available for this process.")
-        
-        # Instructions
-        output_win.addstr(output_height - 2, 2, "Press 'q' to return to the main menu.")
-        output_win.refresh()
-        
-        # Handle user input
-        key = output_win.getch()
-        if key == ord('q'):
-            break
-    
+    output_win.box()
+    output_win.addstr(1, 2, f"Output for {proc_name} (not implemented)")
+    output_win.addstr(2, 2, "Press any key to close.")
+    output_win.refresh()
+    output_win.getch()
+    output_win.clear()
+    output_win.refresh()
     # Reset cursor visibility
     curses.curs_set(old_cursor)
+    # Clear key buffer
+    curses.flushinp()
+    
+    
 
 def main(stdscr):
     # Initialize DPM_Master
