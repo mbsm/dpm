@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/home/mbustos/dpm/node/node.py", line 21, in <module>
-    from dpm_msg import (
-ModuleNotFoundError: No module named 'dpm_msg'

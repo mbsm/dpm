@@ -1,4 +1,0 @@
-2025-08-15 11:38:23,085 - root - INFO - Host initialized with channels: command=DPM/commands, info=DPM/host_info
-2025-08-15 11:38:23,085 - root - INFO - Host running.
-2025-08-15 11:38:57,176 - root - INFO - Command handler: Received command: create_process for process: /home/mbustos/agv1/nodes/bin/navigator_node
-2025-08-15 11:38:57,177 - root - INFO - Create Process: Created process: Navigator Node with command: /home/mbustos/agv1/nodes/bin/navigator_node auto_restart: False and realtime: False

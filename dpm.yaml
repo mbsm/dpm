@@ -17,6 +17,5 @@ report_threshold: 5
 #timeout in s for stopping a process
 stop_timeout: 2
 
-
 # Log File
 log_file : "/home/mbustos/agv1/logs/procman.log"
