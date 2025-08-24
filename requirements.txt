@@ -1,0 +1,8 @@
+# Core runtime dependencies (pin versions before release)
+psutil>=5.9
+PyYAML>=6.0
+lcm>=1.4
+
+# GUI (optional)
+PyQt5>=5.15
+

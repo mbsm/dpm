@@ -5,11 +5,13 @@ import lcm
 import psutil
 from subprocess import PIPE
 import logging
+import logging.handlers
 import socket
 import yaml
 import fcntl
 import sys
 import threading
+import errno
 
 # Define process state constants
 STATE_READY = "T"
@@ -64,18 +66,22 @@ def is_running(proc):
 
 def stream_reader(stream, output_list):
     try:
-        for line in iter(stream.readline, b""):
-            output_list.append(line.decode("utf-8"))
+        while True:
+            line = stream.readline()
+            if not line:
+                break
+            decoded_line = line.decode("utf-8", errors="replace").strip()
+            if decoded_line:  # Only add non-empty lines
+                output_list.append(decoded_line + "\n")
+                logging.debug(f"Stream Reader: Captured line: {repr(decoded_line)}")
     except Exception as e:
         logging.error(f"Stream Reader: Error reading stream: {e}")
 
 
 class NodeAgent:
-    def __init__(self, config_file="../dpm.yaml"):
-        current_dir = os.path.dirname(os.path.realpath(__file__))
-        config_path = os.path.join(current_dir, config_file)
-        self.config = self.load_config(config_path)
-
+    def __init__(self, config_file='/etc/dpm/dpm.yaml'):
+        
+        self.config = self.load_config(config_file)
         self.command_channel = self.config["command_channel"]
         self.host_info_channel = self.config["host_info_channel"]
         self.proc_outputs_channel = self.config["proc_outputs_channel"]
@@ -87,6 +93,7 @@ class NodeAgent:
         self.host_status_timer = Timer(self.config["host_status_interval"])
         self.procs_status_timer = Timer(self.config["procs_status_interval"])
         self.lc_url = self.config["lcm_url"]
+        self.log_file_path = self.config.get("log_file_path", "/var/log/dpm/node.log")
 
         self.hostname = socket.gethostname()
         self.last_publish_time = 0
@@ -100,7 +107,7 @@ class NodeAgent:
         except Exception as e:
             raise RuntimeError(f"Failed to initialize LCM with URL {self.lc_url}: {e}")
 
-        self.init_logging(current_dir)
+        self.init_logging()
         logging.info(f"Host initialized with channels: command={self.command_channel}, info={self.host_info_channel}")
 
     def load_config(self, config_path):
@@ -126,12 +133,37 @@ class NodeAgent:
                 raise KeyError(f"Missing required configuration field: {field}")
         return config
 
-    def init_logging(self, current_dir):
-        # logs will go to stderr; systemd/journal will pick them up when run as a service
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        )
+    def init_logging(self):
+        # Ensure the log directory exists
+        log_dir = os.path.dirname(self.log_file_path)
+        if not os.path.exists(log_dir):
+            try:
+                os.makedirs(log_dir)
+            except OSError as e:
+                # This can happen if the directory is created between the check and the creation
+                if e.errno != errno.EEXIST:
+                    raise
+
+        # Set up a rotating file handler
+        handler = logging.handlers.RotatingFileHandler(
+            self.log_file_path, maxBytes=10*1024*1024, backupCount=5)
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        handler.setFormatter(formatter)
+
+        # Get the root logger and add the handler
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)  # Changed to DEBUG to see stream reader output
+        
+        # Remove any existing handlers to avoid duplicate logs
+        if logger.hasHandlers():
+            logger.handlers.clear()
+            
+        logger.addHandler(handler)
+
+        # Also log to stderr to be picked up by systemd/journald
+        stream_handler = logging.StreamHandler(sys.stderr)
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
 
     def command_handler(self, channel, data):
         msg = command_t.decode(data)
@@ -171,7 +203,7 @@ class NodeAgent:
             "group": group,
             "errors": "",
             "state": STATE_READY,
-            "status": "S",
+            "status": "stopped",
             "runtime": 0,
             "stdout": "",
             "stderr": "",
@@ -202,15 +234,18 @@ class NodeAgent:
         else:
             logging.info(f"Start Process: Starting process: {process_name} with command: {proc_command}")
             try:
-                proc = psutil.Popen(proc_command.split(), stdout=PIPE, stderr=PIPE)
+                proc = psutil.Popen(proc_command.split(), stdout=PIPE, stderr=PIPE, bufsize=1, universal_newlines=False)
                 self.processes[process_name]["proc"] = proc
                 self.processes[process_name]["state"] = STATE_RUNNING
+                self.processes[process_name]["status"] = "running"
 
                 # Start threads to read stdout and stderr
                 stdout_lines = []
                 stderr_lines = []
-                threading.Thread(target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True).start()
-                threading.Thread(target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True).start()
+                stdout_thread = threading.Thread(target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True)
+                stderr_thread = threading.Thread(target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True)
+                stdout_thread.start()
+                stderr_thread.start()
 
                 self.processes[process_name]["stdout_lines"] = stdout_lines
                 self.processes[process_name]["stderr_lines"] = stderr_lines
@@ -229,10 +264,22 @@ class NodeAgent:
                         self.processes[process_name]["errors"] = str(e)
 
             except Exception as e:
-                logging.error(f"Start Process: Failed to start process {process_name}: {e}")
+                error_msg = f"Failed to start process {process_name}: {e}"
+                logging.error(f"Start Process: {error_msg}")
                 self.processes[process_name]["state"] = STATE_FAILED
                 self.processes[process_name]["proc"] = None
                 self.processes[process_name]["errors"] = str(e)
+                self.processes[process_name]["status"] = "failed"
+                
+                # Publish the error to proc_output channel immediately
+                msg = proc_output_t()
+                msg.timestamp = int(time.time() * 1e6)
+                msg.name = process_name
+                msg.hostname = self.hostname
+                msg.group = self.processes[process_name]["group"]
+                msg.stdout = ""
+                msg.stderr = error_msg
+                self.lc.publish(self.proc_outputs_channel, msg.encode())
 
     def stop_process(self, process_name):
         if process_name in self.processes:
@@ -251,11 +298,13 @@ class NodeAgent:
                 logging.info(f"Stop Process: Gracefully stopped process: {process_name} with PID {proc.pid}")
                 self.processes[process_name]["exit_code"] = proc.returncode
                 self.processes[process_name]["state"] = STATE_READY
+                self.processes[process_name]["status"] = "stopped"
             except psutil.TimeoutExpired:
                 proc.kill()
                 logging.warning(f"Stop Process: Forcefully killed process: {process_name} with PID {proc.pid}")
                 self.processes[process_name]["exit_code"] = proc.returncode
                 self.processes[process_name]["state"] = STATE_KILLED
+                self.processes[process_name]["status"] = "killed"
         else:
             logging.warning(f"Stop Process: Process {process_name} not found, ignoring command.")
 
@@ -283,14 +332,39 @@ class NodeAgent:
 
         if proc_info["state"] == STATE_RUNNING:
             if not is_running(proc):
-                logging.warning(f"Monitor Process: Process {process_name} found stopped.")
+                logging.warning(f"Monitor Process: Process {process_name} found stopped with exit code: {proc.poll()}")
                 proc_info["state"] = STATE_FAILED
                 proc_info["exit_code"] = proc.poll()
                 proc_info["proc"] = None
+                proc_info["status"] = "failed"
+                
+                # Capture any remaining output from the streams
                 if proc_info.get("stdout_lines") is not None and proc_info.get("stderr_lines") is not None:
-                    proc_info["errors"] = "".join(proc_info["stdout_lines"]) + "".join(proc_info["stderr_lines"])
+                    # Give streams a moment to finish reading
+                    import time
+                    time.sleep(0.1)
+                    
+                    stdout_content = "".join(proc_info["stdout_lines"])
+                    stderr_content = "".join(proc_info["stderr_lines"])
+                    
+                    logging.info(f"Monitor Process: Captured stdout for {process_name}: {repr(stdout_content)}")
+                    logging.info(f"Monitor Process: Captured stderr for {process_name}: {repr(stderr_content)}")
+                    
+                    proc_info["errors"] = stdout_content + stderr_content
                     proc_info["stdout_lines"].clear()
                     proc_info["stderr_lines"].clear()
+                    
+                    # Publish the captured output to LCM immediately
+                    if stdout_content or stderr_content:
+                        msg = proc_output_t()
+                        msg.timestamp = int(time.time() * 1e6)
+                        msg.name = process_name
+                        msg.hostname = self.hostname
+                        msg.group = proc_info["group"]
+                        msg.stdout = stdout_content
+                        msg.stderr = stderr_content
+                        self.lc.publish(self.proc_outputs_channel, msg.encode())
+                        logging.debug(f"Monitor Process: Published output for failed process {process_name}")
                 else:
                     proc_info["errors"] = "Process stopped unexpectedly."
 
@@ -299,10 +373,19 @@ class NodeAgent:
                     self.start_process(process_name)
             else:
                 if "stdout_lines" in proc_info and "stderr_lines" in proc_info:
-                    proc_info["stdout"] = "".join(proc_info["stdout_lines"])
-                    proc_info["stderr"] = "".join(proc_info["stderr_lines"])
+                    stdout_content = "".join(proc_info["stdout_lines"])
+                    stderr_content = "".join(proc_info["stderr_lines"])
+                    
+                    proc_info["stdout"] = stdout_content
+                    proc_info["stderr"] = stderr_content
                     proc_info["stdout_lines"].clear()
                     proc_info["stderr_lines"].clear()
+                    
+                    # Log any new output for debugging
+                    if stdout_content:
+                        logging.debug(f"Monitor Process: New stdout from {process_name}: {repr(stdout_content)}")
+                    if stderr_content:
+                        logging.debug(f"Monitor Process: New stderr from {process_name}: {repr(stderr_content)}")
                 else:
                     logging.warning(f"Monitor Process: Process {process_name} has no stdout or stderr streams.")
 
@@ -372,7 +455,7 @@ class NodeAgent:
                 msg_proc.ppid = proc.ppid()
                 msg_proc.exit_code = -1
                 msg_proc.errors = proc_info["errors"]
-                msg_proc.status = proc.status()
+                msg_proc.status = proc_info["status"]
                 msg_proc.state = proc_info["state"]
                 msg_proc.group = proc_info["group"]
                 msg_proc.cmd = proc_info["cmd"]
@@ -401,7 +484,9 @@ class NodeAgent:
             msg.timestamp = int(time.time() * 1e6)
             msg.name = process_name
             msg.hostname = self.hostname
-            msg.stdout = proc_info["stdout"] + proc_info["stderr"]
+            msg.group = proc_info["group"]
+            msg.stdout = proc_info["stdout"]
+            msg.stderr = proc_info["stderr"]
             self.lc.publish(self.proc_outputs_channel, msg.encode())
             proc_info["stdout"] = ""
             proc_info["stderr"] = ""

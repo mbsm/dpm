@@ -23,7 +23,30 @@ from dpm.tui.forms import show_create_process_form, show_process_dialog
 from dpm.tui.panels import draw_hosts_panel, draw_process_table
 from dpm.tui.io import save_all_process_specs, load_and_create
 
-CONFIG_PATH = "dpm.yaml"
+
+def _resolve_config_path() -> str:
+    env_cfg = os.getenv("DPM_CONFIG")
+    if env_cfg and os.path.isfile(env_cfg):
+        return env_cfg
+    etc_cfg = "/etc/dpm/dpm.yaml"
+    if os.path.isfile(etc_cfg):
+        return etc_cfg
+    opt_cfg = "/opt/dpm/dpm.yaml"
+    if os.path.isfile(opt_cfg):
+        return opt_cfg
+    xdg_home = os.getenv("XDG_CONFIG_HOME", os.path.join(Path.home(), ".config"))
+    xdg_cfg = os.path.join(xdg_home, "dpm", "dpm.yaml")
+    if os.path.isfile(xdg_cfg):
+        return xdg_cfg
+    # repo fallback
+    here = Path(__file__).resolve()
+    for p in [here.parent, *here.parents]:
+        candidate = p / "dpm.yaml"
+        if candidate.is_file():
+            return str(candidate)
+    return etc_cfg
+
+
 REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 _spawned_nodes = []
@@ -133,7 +156,7 @@ FOOTER_HELP = (
 
 def _curses_main(stdscr):
     try:
-        controller = Controller(CONFIG_PATH)
+        controller = Controller(_resolve_config_path())
         controller.start()
     except Exception as e:
         return f"Error initializing Controller: {e}"

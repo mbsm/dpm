@@ -14,7 +14,6 @@ from dpm_msgs import (
     proc_output_t,
 )
 
-
 class Controller:
     def __init__(self, config_path):
         # load configuration

@@ -153,8 +153,10 @@ class MainWindow(QMainWindow):
         self.hosts_list.setMovement(self.hosts_list.Static)
         self.hosts_list.setSpacing(12)
         self.hosts_list.setWordWrap(True)
+        # Add padding around the entire grid of host cards
+        self.hosts_list.setStyleSheet("QListWidget { padding: 10px; }")
         # Fix each card’s allocated area; width will be recomputed to fit hostnames
-        self._host_card_size = QSize(240, 96)  # initial; will auto-adjust
+        self._host_card_size = QSize(96, 96)  # initial; will auto-adjust
         self.hosts_list.setGridSize(self._host_card_size)
         layout.addWidget(self.hosts_list)
 
@@ -638,15 +640,20 @@ class MainWindow(QMainWindow):
 
     def spawn_local_node(self):
         try:
-            # TODO: call shared helper, e.g., utils.local_node.spawn()
-            QMessageBox.information(self, "Node", "Spawned local node.")
+            from dpm.utils.local_node import spawn_local_node
+            pid, logfile = spawn_local_node()
+            QMessageBox.information(self, "Node", f"Spawned node PID {pid} -> {logfile}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to spawn local node: {e}")
 
     def stop_local_node(self):
         try:
-            # TODO: call shared helper, e.g., utils.local_node.stop_last()
-            QMessageBox.information(self, "Node", "Stopped local node.")
+            from dpm.utils.local_node import stop_last_spawned_node
+            terminated = stop_last_spawned_node()
+            if terminated:
+                QMessageBox.information(self, "Node", "Stopped local node.")
+            else:
+                QMessageBox.information(self, "Node", "Stopped local node (killed).")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to stop local node: {e}")
 

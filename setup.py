@@ -1,0 +1,20 @@
+from setuptools import setup, find_packages
+
+setup(
+    name='dpm',
+    version='0.1.0',
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
+    description='Distributed Process Manager',
+    author='Your Name',
+    author_email='your.email@example.com',
+    entry_points={
+        'gui_scripts': [
+            'dpm-gui = dpm.gui.main:main',
+        ],
+    },
+    install_requires=[
+        # Add dependencies from requirements.txt here
+        # e.g., 'PyQt5', 'lcm', 'psutil', 'pyyaml'
+    ],
+)
