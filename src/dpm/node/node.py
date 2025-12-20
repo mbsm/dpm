@@ -70,10 +70,14 @@ def stream_reader(stream, output_list):
             line = stream.readline()
             if not line:
                 break
-            decoded_line = line.decode("utf-8", errors="replace").strip()
-            if decoded_line:  # Only add non-empty lines
-                output_list.append(decoded_line + "\n")
-                logging.debug(f"Stream Reader: Captured line: {repr(decoded_line)}")
+            # line is str when Popen(text=True); keep compatibility if bytes
+            if isinstance(line, bytes):
+                line = line.decode("utf-8", errors="replace")
+            line = line.rstrip("\r\n")
+            if line:
+                output_list.append(line + "\n")
+                if logging.getLogger().isEnabledFor(logging.DEBUG):
+                    logging.debug(f"Stream Reader: Captured line: {repr(line)}")
     except Exception as e:
         logging.error(f"Stream Reader: Error reading stream: {e}")
 
@@ -134,36 +138,38 @@ class NodeAgent:
         return config
 
     def init_logging(self):
-        # Ensure the log directory exists
-        log_dir = os.path.dirname(self.log_file_path)
-        if not os.path.exists(log_dir):
-            try:
-                os.makedirs(log_dir)
-            except OSError as e:
-                # This can happen if the directory is created between the check and the creation
-                if e.errno != errno.EEXIST:
-                    raise
-
-        # Set up a rotating file handler
-        handler = logging.handlers.RotatingFileHandler(
-            self.log_file_path, maxBytes=10*1024*1024, backupCount=5)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-
-        # Get the root logger and add the handler
+        log_path = "/var/log/dpm/node.log"
         logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)  # Changed to DEBUG to see stream reader output
-        
-        # Remove any existing handlers to avoid duplicate logs
-        if logger.hasHandlers():
-            logger.handlers.clear()
-            
-        logger.addHandler(handler)
 
-        # Also log to stderr to be picked up by systemd/journald
-        stream_handler = logging.StreamHandler(sys.stderr)
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
+        # Resolve desired level
+        cfg_level = os.environ.get("DPM_LOG_LEVEL", "INFO").upper()
+        if cfg_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            cfg_level = "INFO"
+        level = getattr(logging, cfg_level, logging.INFO)
+        logger.setLevel(level)
+
+        # Remove any pre-existing handlers to avoid duplicating
+        for h in list(logger.handlers):
+            logger.removeHandler(h)
+
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+        stderr_handler = logging.StreamHandler()
+        stderr_handler.setFormatter(formatter)
+        stderr_handler.setLevel(level)
+        logger.addHandler(stderr_handler)
+
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            fh = logging.handlers.RotatingFileHandler(
+                log_path, maxBytes=10*1024*1024, backupCount=5
+            )
+            fh.setFormatter(formatter)
+            fh.setLevel(level)
+            logger.addHandler(fh)
+            logger.info(f"Logging initialized (level={cfg_level}) path={log_path}")
+        except Exception as e:
+            logger.warning(f"File logging disabled ({e}); stderr only.")
 
     def command_handler(self, channel, data):
         msg = command_t.decode(data)
@@ -213,7 +219,7 @@ class NodeAgent:
     def delete_process(self, process_name):
         if process_name in self.processes:
             if self.processes[process_name]["proc"] is not None:
-                self.stop_process(process_name)
+                self.stop_process(msg.name)
             del self.processes[process_name]
             logging.info(f"Delete Process: Deleted process: {process_name}")
         else:
@@ -234,7 +240,15 @@ class NodeAgent:
         else:
             logging.info(f"Start Process: Starting process: {process_name} with command: {proc_command}")
             try:
-                proc = psutil.Popen(proc_command.split(), stdout=PIPE, stderr=PIPE, bufsize=1, universal_newlines=False)
+                proc = psutil.Popen(
+                    proc_command.split(),
+                    stdout=PIPE,
+                    stderr=PIPE,
+                    text=True,              # enable text mode (no decode warnings)
+                    encoding="utf-8",
+                    errors="replace",
+                    bufsize=1               # line-buffered (valid in text mode)
+                )
                 self.processes[process_name]["proc"] = proc
                 self.processes[process_name]["state"] = STATE_RUNNING
                 self.processes[process_name]["status"] = "running"
@@ -383,9 +397,11 @@ class NodeAgent:
                     
                     # Log any new output for debugging
                     if stdout_content:
-                        logging.debug(f"Monitor Process: New stdout from {process_name}: {repr(stdout_content)}")
+                        if logging.getLogger().isEnabledFor(logging.DEBUG):
+                            logging.debug(f"Monitor Process: New stdout from {process_name}: {repr(stdout_content)}")
                     if stderr_content:
-                        logging.debug(f"Monitor Process: New stderr from {process_name}: {repr(stderr_content)}")
+                        if logging.getLogger().isEnabledFor(logging.DEBUG):
+                            logging.debug(f"Monitor Process: New stderr from {process_name}: {repr(stderr_content)}")
                 else:
                     logging.warning(f"Monitor Process: Process {process_name} has no stdout or stderr streams.")
 
