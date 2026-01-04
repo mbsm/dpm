@@ -10,7 +10,7 @@ except ImportError:
 import struct
 
 class proc_info_t(object):
-    __slots__ = ["name", "group", "hostname", "state", "status", "errors", "cmd", "cpu", "mem_rss", "mem_vms", "priority", "pid", "ppid", "auto_restart", "realtime", "exit_code", "runtime"]
+    __slots__ = ["name", "group", "hostname", "state", "status", "errors", "exec_command", "cpu", "mem_rss", "mem_vms", "priority", "pid", "ppid", "auto_restart", "realtime", "exit_code", "runtime"]
 
     __typenames__ = ["string", "string", "string", "string", "string", "string", "string", "float", "int32_t", "int32_t", "int32_t", "int32_t", "int32_t", "boolean", "boolean", "int8_t", "int32_t"]
 
@@ -23,7 +23,7 @@ class proc_info_t(object):
         self.state = ""
         self.status = ""
         self.errors = ""
-        self.cmd = ""
+        self.exec_command = ""
         self.cpu = 0.0
         self.mem_rss = 0
         self.mem_vms = 0
@@ -66,9 +66,9 @@ class proc_info_t(object):
         buf.write(struct.pack('>I', len(__errors_encoded)+1))
         buf.write(__errors_encoded)
         buf.write(b"\0")
-        __cmd_encoded = self.cmd.encode('utf-8')
-        buf.write(struct.pack('>I', len(__cmd_encoded)+1))
-        buf.write(__cmd_encoded)
+        __exec_command_encoded = self.exec_command.encode('utf-8')
+        buf.write(struct.pack('>I', len(__exec_command_encoded)+1))
+        buf.write(__exec_command_encoded)
         buf.write(b"\0")
         buf.write(struct.pack(">fiiiiibbbi", self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid, self.auto_restart, self.realtime, self.exit_code, self.runtime))
 
@@ -96,8 +96,8 @@ class proc_info_t(object):
         self.status = buf.read(__status_len)[:-1].decode('utf-8', 'replace')
         __errors_len = struct.unpack('>I', buf.read(4))[0]
         self.errors = buf.read(__errors_len)[:-1].decode('utf-8', 'replace')
-        __cmd_len = struct.unpack('>I', buf.read(4))[0]
-        self.cmd = buf.read(__cmd_len)[:-1].decode('utf-8', 'replace')
+        __exec_command_len = struct.unpack('>I', buf.read(4))[0]
+        self.exec_command = buf.read(__exec_command_len)[:-1].decode('utf-8', 'replace')
         self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid = struct.unpack(">fiiiii", buf.read(24))
         self.auto_restart = bool(struct.unpack('b', buf.read(1))[0])
         self.realtime = bool(struct.unpack('b', buf.read(1))[0])
@@ -107,7 +107,7 @@ class proc_info_t(object):
 
     def _get_hash_recursive(parents):
         if proc_info_t in parents: return 0
-        tmphash = (0x9c4e823f87abbd5c) & 0xffffffffffffffff
+        tmphash = (0x8d4d3c3cc3a8a525) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

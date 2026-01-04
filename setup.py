@@ -12,6 +12,9 @@ setup(
         'gui_scripts': [
             'dpm-gui = dpm.gui.main:main',
         ],
+        'console_scripts': [
+            'dpm-node = dpm.node.node:main',
+        ],
     },
     install_requires=[
         # Add dependencies from requirements.txt here

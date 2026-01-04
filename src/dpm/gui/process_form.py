@@ -50,7 +50,7 @@ class ProcessForm(QtWidgets.QWidget):
 
     def load_process_data(self):
         self.name_input.setText(self.process.name)
-        self.command_input.setText(self.process.cmd)
+        self.command_input.setText(getattr(self.process, "exec_command", "") or "")
         self.group_input.setText(getattr(self.process, "group", ""))
         self.host_input.setText(getattr(self.process, "hostname", ""))
         self.auto_restart_checkbox.setChecked(getattr(self.process, "auto_restart", False))
@@ -58,13 +58,13 @@ class ProcessForm(QtWidgets.QWidget):
 
     def submit(self):
         name = self.name_input.text().strip()
-        command = self.command_input.text().strip()
+        proc_command = self.command_input.text().strip()
         group = self.group_input.text().strip()
         host = self.host_input.text().strip()
         auto_restart = self.auto_restart_checkbox.isChecked()
         realtime = self.realtime_checkbox.isChecked()
 
-        if not name or not command or not host:
+        if not name or not proc_command or not host:
             QtWidgets.QMessageBox.warning(self, "Input Error", "Please fill in all required fields.")
             return
 
@@ -74,9 +74,9 @@ class ProcessForm(QtWidgets.QWidget):
                 old_host = getattr(self.process, "hostname", host)
                 if old_name:
                     self.controller.del_proc(old_name, old_host)
-                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
             else:
-                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error", f"Failed to submit process: {e}")
             return

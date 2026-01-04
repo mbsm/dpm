@@ -11,7 +11,7 @@ struct proc_info_t
     // host running execting the proccess
     string hostname;
 
-    // procman3 state of the procces 
+    // state of the proc
     string state;
 
     // status of the procces
@@ -20,16 +20,16 @@ struct proc_info_t
     // errors 
     string errors;
 
-    // command
-    string cmd;
+    // command line executed for this process
+    string exec_command;
 
     // cpu usage of the procces in % of one cpu [0,1]
     float cpu;
     
-    // Rss memory
+    // Rss memory bytes
     int32_t mem_rss;
 
-    // virtual memory size
+    // virtual memory size bytes
     int32_t mem_vms;
 
     

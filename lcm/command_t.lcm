@@ -11,16 +11,15 @@ struct command_t
     // remote host that should execute the command
     string hostname;
 
-    // commands: create, start, stop, delete
-    string command ;
+    // action: create_process, start_process, stop_process, delete_process, start_group, stop_group
+    string action;
 
-    // remote path of command to execute
-    string proc_command;
+    // command line to execute 
+    string exec_command;
 
-    // auto restart flag 
-    boolean auto_restart; 
+    // auto restart flag
+    boolean auto_restart;
 
     // realtime priority flag
     boolean realtime;
-
 }

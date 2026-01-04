@@ -10,7 +10,7 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["name", "group", "hostname", "command", "proc_command", "auto_restart", "realtime"]
+    __slots__ = ["name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime"]
 
     __typenames__ = ["string", "string", "string", "string", "string", "boolean", "boolean"]
 
@@ -20,8 +20,8 @@ class command_t(object):
         self.name = ""
         self.group = ""
         self.hostname = ""
-        self.command = ""
-        self.proc_command = ""
+        self.action = ""
+        self.exec_command = ""
         self.auto_restart = False
         self.realtime = False
 
@@ -44,13 +44,13 @@ class command_t(object):
         buf.write(struct.pack('>I', len(__hostname_encoded)+1))
         buf.write(__hostname_encoded)
         buf.write(b"\0")
-        __command_encoded = self.command.encode('utf-8')
-        buf.write(struct.pack('>I', len(__command_encoded)+1))
-        buf.write(__command_encoded)
+        __action_encoded = self.action.encode('utf-8')
+        buf.write(struct.pack('>I', len(__action_encoded)+1))
+        buf.write(__action_encoded)
         buf.write(b"\0")
-        __proc_command_encoded = self.proc_command.encode('utf-8')
-        buf.write(struct.pack('>I', len(__proc_command_encoded)+1))
-        buf.write(__proc_command_encoded)
+        __exec_command_encoded = self.exec_command.encode('utf-8')
+        buf.write(struct.pack('>I', len(__exec_command_encoded)+1))
+        buf.write(__exec_command_encoded)
         buf.write(b"\0")
         buf.write(struct.pack(">bb", self.auto_restart, self.realtime))
 
@@ -72,10 +72,10 @@ class command_t(object):
         self.group = buf.read(__group_len)[:-1].decode('utf-8', 'replace')
         __hostname_len = struct.unpack('>I', buf.read(4))[0]
         self.hostname = buf.read(__hostname_len)[:-1].decode('utf-8', 'replace')
-        __command_len = struct.unpack('>I', buf.read(4))[0]
-        self.command = buf.read(__command_len)[:-1].decode('utf-8', 'replace')
-        __proc_command_len = struct.unpack('>I', buf.read(4))[0]
-        self.proc_command = buf.read(__proc_command_len)[:-1].decode('utf-8', 'replace')
+        __action_len = struct.unpack('>I', buf.read(4))[0]
+        self.action = buf.read(__action_len)[:-1].decode('utf-8', 'replace')
+        __exec_command_len = struct.unpack('>I', buf.read(4))[0]
+        self.exec_command = buf.read(__exec_command_len)[:-1].decode('utf-8', 'replace')
         self.auto_restart = bool(struct.unpack('b', buf.read(1))[0])
         self.realtime = bool(struct.unpack('b', buf.read(1))[0])
         return self
@@ -83,7 +83,7 @@ class command_t(object):
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0x36459f0534860637) & 0xffffffffffffffff
+        tmphash = (0xbc5aeb8ea1c6f3b5) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

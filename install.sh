@@ -23,6 +23,14 @@ DESKTOP_ENTRY_INSTALL_PATH="/usr/share/applications"
 
 # --- Functions ---
 
+get_sudo_user_home() {
+    if [ -n "$SUDO_USER" ]; then
+        getent passwd "$SUDO_USER" | cut -d: -f6
+    else
+        echo "$HOME"
+    fi
+}
+
 uninstall() {
     echo "Starting DPM uninstallation..."
 
@@ -36,23 +44,27 @@ uninstall() {
     # 2. Remove desktop entry and icon
     echo "Removing desktop entry and icon..."
     rm -f "$DESKTOP_ENTRY_INSTALL_PATH/$DESKTOP_ENTRY_NAME"
-    if command -v xdg-icon-resource &> /dev/null; then
+    if command -v xdg-icon-resource >/dev/null 2>&1; then
         echo "Uninstalling icon using xdg-icon-resource..."
-        xdg-icon-resource uninstall --size 256 "$DPM_ICON_NAME"
+        xdg-icon-resource uninstall --size 256 "$DPM_ICON_NAME" || true
     else
         echo "xdg-icon-resource not found, removing icon manually."
-        rm -f "$DPM_ICON_INSTALL_PATH/$DPM_ICON_NAME.png"
+        rm -f "$DPM_ICON_INSTALL_PATH/$DPM_ICON_NAME.png" || true
     fi
 
-    if [ -x "$(command -v update-desktop-database)" ]; then
-        update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH" || true
     fi
 
     # 3. Remove installed files and directories
     echo "Removing installed files..."
     rm -rf "$DPM_INSTALL_DIR"
-    rm -rf "$DPM_CONFIG_DIR"
     rm -rf "$DPM_LOG_DIR"
+
+    # NOTE: Preserve config by default (operators may have edits).
+    # If you want to remove config too, uncomment the next line:
+    # rm -rf "$DPM_CONFIG_DIR"
+
     SUDO_USER_HOME=$(get_sudo_user_home)
     if [ -d "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME" ]; then
         echo "Removing save directory: $SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
@@ -68,69 +80,68 @@ uninstall() {
     exit 0
 }
 
-# Function to get the home directory of the user who invoked sudo
-get_sudo_user_home() {
-    if [ -n "$SUDO_USER" ]; then
-        getent passwd "$SUDO_USER" | cut -d: -f6
-    else
-        echo "$HOME"
-    fi
-}
-
-# --- Installation Steps ---
-
 install() {
     echo "Starting DPM installation..."
 
     # 1. Clean up previous installations
     echo "Cleaning up previous installations..."
     rm -rf "$DPM_INSTALL_DIR"
-    rm -rf "$DPM_CONFIG_DIR"
+
+    # Preserve config on reinstall (do not delete operator edits)
+    # rm -rf "$DPM_CONFIG_DIR"
+
     SUDO_USER_HOME=$(get_sudo_user_home)
     if [ -d "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME" ]; then
         rm -rf "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
     fi
 
-    # 2. Create directories
-    echo "Creating necessary directories..."
-    mkdir -p "$DPM_INSTALL_DIR"
-    mkdir -p "$DPM_CONFIG_DIR"
-    mkdir -p "$DPM_LOG_DIR"
-    chown "$DPM_SERVICE_USER:$DPM_SERVICE_USER" "$DPM_LOG_DIR"
-    mkdir -p "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
-    chown -R "$SUDO_USER:$SUDO_USER" "$SUDO_USER_HOME/.dpm"
-
-    # 3. Copy project files and setup.py
-    echo "Copying source files to $DPM_INSTALL_DIR..."
-    cp -r "$DPM_SRC_DIR/src" "$DPM_INSTALL_DIR/"
-    cp "$DPM_SRC_DIR/setup.py" "$DPM_INSTALL_DIR/"
-    cp "$DPM_SRC_DIR/dpm.yaml" "$DPM_CONFIG_DIR/dpm.yaml"
-    # Copy other necessary files if any
-    cp "$DPM_SRC_DIR/requirements.txt" "$DPM_INSTALL_DIR/"
-
-    # 4. User and permissions setup
+    # 2. User and permissions setup (must happen before chown)
     echo "Setting up user '$DPM_SERVICE_USER'..."
     if ! id -u "$DPM_SERVICE_USER" >/dev/null 2>&1; then
         echo "Creating user '$DPM_SERVICE_USER'..."
         useradd -r -s /bin/false "$DPM_SERVICE_USER"
     fi
 
-    # Grant real-time permissions to the user
+    # 3. Create directories
+    echo "Creating necessary directories..."
+    mkdir -p "$DPM_INSTALL_DIR"
+    mkdir -p "$DPM_CONFIG_DIR"
+    mkdir -p "$DPM_LOG_DIR"
+    chown "$DPM_SERVICE_USER:$DPM_SERVICE_USER" "$DPM_LOG_DIR"
+
+    mkdir -p "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
+    if [ -n "$SUDO_USER" ]; then
+        chown -R "$SUDO_USER:$SUDO_USER" "$SUDO_USER_HOME/.dpm" || true
+    fi
+
+    # 4. Copy project files
+    echo "Copying source files to $DPM_INSTALL_DIR..."
+    cp -r "$DPM_SRC_DIR/src" "$DPM_INSTALL_DIR/"
+    cp "$DPM_SRC_DIR/setup.py" "$DPM_INSTALL_DIR/"
+    cp "$DPM_SRC_DIR/requirements.txt" "$DPM_INSTALL_DIR/"
+
+    # Install default config only if missing
+    if [ ! -f "$DPM_CONFIG_DIR/dpm.yaml" ]; then
+        cp "$DPM_SRC_DIR/dpm.yaml" "$DPM_CONFIG_DIR/dpm.yaml"
+    else
+        echo "Config exists at $DPM_CONFIG_DIR/dpm.yaml; leaving it unchanged."
+    fi
+
+    # 5. Grant real-time permissions (PAM limits; systemd permissions are set in the unit too)
     echo "Granting real-time permissions..."
     cat > /etc/security/limits.d/99-dpm-realtime.conf <<EOF
-# Permissions for dpm-node service
+# Note: PAM limits often do NOT apply to systemd services.
+# Kept for interactive/foreground runs.
 $DPM_SERVICE_USER   soft    rtprio  99
 $DPM_SERVICE_USER   hard    rtprio  99
 EOF
 
-    # 5. Systemd service setup
+    # 6. Systemd service setup
     echo "Setting up systemd service for dpm-node..."
-    # Create a Python virtual environment
     python3 -m venv "$DPM_INSTALL_DIR/venv"
     "$DPM_INSTALL_DIR/venv/bin/pip" install --upgrade pip
     "$DPM_INSTALL_DIR/venv/bin/pip" install -r "$DPM_INSTALL_DIR/requirements.txt"
-    
-    # Install the DPM package using setup.py
+
     echo "Installing DPM package into virtual environment..."
     cd "$DPM_INSTALL_DIR"
     "$DPM_INSTALL_DIR/venv/bin/pip" install -e .
@@ -143,11 +154,36 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+Type=simple
 User=$DPM_SERVICE_USER
 Group=$DPM_SERVICE_USER
-ExecStart=$DPM_INSTALL_DIR/venv/bin/python -m dpm.node.node
 WorkingDirectory=$DPM_INSTALL_DIR
+
+# Ensure node reads standard config location
+Environment=DPM_CONFIG=/etc/dpm/dpm.yaml
+
+# journald logging
+StandardOutput=journal
+StandardError=journal
+
+# Run via installed console script (robust against module path changes)
+ExecStart=$DPM_INSTALL_DIR/venv/bin/dpm-node
+
 Restart=always
+RestartSec=2
+
+# Realtime permissions for systemd service
+LimitRTPRIO=99
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Allow reading/executing binaries under /home/* while keeping it non-writable
+ProtectHome=read-only
+ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
@@ -156,15 +192,16 @@ EOF
     echo "Reloading systemd daemon and starting dpm-node service..."
     systemctl daemon-reload
     systemctl enable dpm-node.service
-    systemctl start dpm-node.service
+    systemctl restart dpm-node.service
 
     echo "Checking dpm-node service status:"
     systemctl status dpm-node.service --no-pager
 
-    # 6. Desktop entry for dpm-gui
+    # 7. Desktop entry for dpm-gui
     echo "Creating desktop entry for dpm-gui..."
+
     # Install icon
-    if command -v xdg-icon-resource &> /dev/null; then
+    if command -v xdg-icon-resource >/dev/null 2>&1; then
         echo "Installing icon using xdg-icon-resource..."
         xdg-icon-resource install --size 256 "$DPM_SRC_DIR/assets/icons/dpm-gui.png" "$DPM_ICON_NAME"
     else
@@ -185,9 +222,11 @@ Type=Application
 Categories=System;
 EOF
 
-    # Update desktop database
+    # Update desktop database (guarded)
     echo "Updating desktop database..."
-    update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH"
+    fi
 
     echo "DPM installation completed successfully!"
     echo "You can find the application in your system's menu."
@@ -197,7 +236,6 @@ EOF
 }
 
 # --- Main script ---
-
 case "$1" in
     install)
         install

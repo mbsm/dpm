@@ -23,15 +23,10 @@ class ProcessDialog(QDialog):
         self.realtime_checkbox = QCheckBox()
 
         if self.proc:
-            self.name_input.setText(self.proc.name)
-            self.command_input.setText(self.proc.cmd)
-            self.group_input.setText(getattr(self.proc, "group", ""))
-            self.host_input.setText(getattr(self.proc, "hostname", ""))
-            self.auto_restart_checkbox.setChecked(getattr(self.proc, "auto_restart", False))
-            self.realtime_checkbox.setChecked(getattr(self.proc, "realtime", False))
+            self.load_process_data()
 
         self.form_layout.addRow("Process Name:", self.name_input)
-        self.form_layout.addRow("Command:", self.command_input)
+        self.form_layout.addRow("Proc Command:", self.command_input)
         self.form_layout.addRow("Group:", self.group_input)
         self.form_layout.addRow("Host:", self.host_input)
         self.form_layout.addRow("Auto Restart:", self.auto_restart_checkbox)
@@ -53,28 +48,36 @@ class ProcessDialog(QDialog):
 
         self.setLayout(layout)
 
+    def load_process_data(self):
+        # use self.proc (not self.process)
+        self.name_input.setText(getattr(self.proc, "name", "") or "")
+        self.command_input.setText(getattr(self.proc, "exec_command", "") or "")
+        self.group_input.setText(getattr(self.proc, "group", "") or "")
+        self.host_input.setText(getattr(self.proc, "hostname", "") or "")
+        self.auto_restart_checkbox.setChecked(bool(getattr(self.proc, "auto_restart", False)))
+        self.realtime_checkbox.setChecked(bool(getattr(self.proc, "realtime", False)))
+
     def save_process(self):
         name = self.name_input.text().strip()
-        command = self.command_input.text().strip()
+        proc_command = self.command_input.text().strip()
         group = self.group_input.text().strip()
         host = self.host_input.text().strip()
         auto_restart = self.auto_restart_checkbox.isChecked()
         realtime = self.realtime_checkbox.isChecked()
 
-        if not name or not command or not host:
-            QMessageBox.warning(self, "Input Error", "Process name, command, and host are required.")
+        if not name or not proc_command or not host:
+            QMessageBox.warning(self, "Input Error", "Process name, proc command, and host are required.")
             return
 
         try:
             if self.proc:
-                # if editing, remove old proc and create updated one
                 old_host = getattr(self.proc, "hostname", host)
                 old_name = getattr(self.proc, "name", None)
                 if old_name:
                     self.controller.del_proc(old_name, old_host)
-                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
             else:
-                self.controller.create_proc(name, command, group, host, auto_restart, realtime)
+                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")
             return

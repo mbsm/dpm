@@ -1,25 +1,30 @@
-from PyQt5.QtWidgets import QMainWindow, QVBoxLayout, QWidget, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QLabel, QMessageBox, QAction, QFileDialog, QTreeWidget, QTreeWidgetItem, QMenu, QFrame, QApplication
-from PyQt5.QtCore import Qt, QTimer, QSize
+from PyQt5.QtWidgets import (
+    QMainWindow, QVBoxLayout, QWidget, QListWidget, QListWidgetItem,
+    QPushButton, QHBoxLayout, QLabel, QMessageBox, QAction, QFileDialog,
+    QTreeWidget, QTreeWidgetItem, QMenu, QFrame, QApplication
+)
+from PyQt5.QtCore import Qt, QSize, QTimer
 from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QPalette
 from .process_dialog import ProcessDialog
 from .process_output import ProcessOutput
-from dpm.tui.io import save_all_process_specs, load_and_create
+from dpm.spec_io import save_all_process_specs, load_and_create
 import os
 import time
+import logging
 
-# TUI-style status mapping from single-letter state codes
+# status mapping from single-letter state codes
 STATE_NAME_MAP = {
     "T": "Ready",
     "R": "Running",
     "S": "Stopped",
     "F": "Failed",
     "K": "Killed",
-    "E": "Exited",  # optional if your backend uses it
+    "E": "Exited",  
 }
 
 HOST_OFFLINE_THRESHOLD_SEC = 5
 
-# Color palette (TUI-like)
+# Color palette 
 COLOR_GREEN = QColor(46, 204, 113)   # Running / Yes / Low usage
 COLOR_RED = QColor(231, 76, 60)      # Stopped / Failed / Killed / Offline / High usage
 COLOR_YELLOW = QColor(241, 196, 15)  # Mixed / Medium usage
@@ -41,15 +46,15 @@ class HostCard(QFrame):
         self.status.setObjectName("StatLabel")
         self.mem = QLabel("", self)
         self.mem.setObjectName("StatLabel")
-        self.mem.setTextFormat(Qt.RichText)   # color only the number
+        self.mem.setTextFormat(Qt.RichText)   
         self.cpu = QLabel("", self)
         self.cpu.setObjectName("StatLabel")
-        self.cpu.setTextFormat(Qt.RichText)   # color only the number
+        self.cpu.setTextFormat(Qt.RichText)   
         self.v.addWidget(self.title)
         self.v.addWidget(self.status)
         self.v.addWidget(self.mem)
         self.v.addWidget(self.cpu)
-        self.set_theme(dark=False)  # default light theme
+        self.set_theme(dark=False) 
 
     def set_theme(self, dark: bool):
         if dark:
@@ -87,35 +92,45 @@ class HostCard(QFrame):
         self.cpu.setText(f"Cpu usage: <span style='color:{cpu_color}'>{cpu_pct}%</span>")
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller):
-        super().__init__()
+    def __init__(self, controller, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.controller = controller
         # Keep modeless output windows alive (one per proc)
         self.output_windows = {}
+        
         # Keep and reuse host cards to avoid flicker/resize jumps
         self._host_item_map = {}  # host -> (QListWidgetItem, HostCard)
         self.dark_mode = False
         self.setWindowTitle("DPM - Process Manager")
         self.setGeometry(100, 100, 900, 600)
 
+        # caches for update-in-place process tree ----
+        self._group_items = {}  # group_name -> QTreeWidgetItem (top-level)
+        self._proc_items = {}   # proc_name  -> QTreeWidgetItem (child)
+        # ------------------------------------------------------
+
         # Create a menu bar
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
+        
         # Black mode toggle
         self.black_action = QAction("&Black Mode", self, checkable=True)
         self.black_action.toggled.connect(self.toggle_black_mode)
         file_menu.addAction(self.black_action)
         file_menu.addSeparator()
+        
         # Quit
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(lambda: QApplication.instance().quit())
         file_menu.addAction(quit_action)
 
+        # Save
         save_action = QAction("&Save As...", self)
         save_action.triggered.connect(self.save_all_processes)
         file_menu.addAction(save_action)
 
+        # Load
         load_action = QAction("&Load...", self)
         load_action.triggered.connect(self.load_processes_from_file)
         file_menu.addAction(load_action)
@@ -129,7 +144,7 @@ class MainWindow(QMainWindow):
         stop_action.triggered.connect(self.stop_local_node)
         node_menu.addAction(stop_action)
 
-        # Process menu (replaces the New button)
+        # Process menu 
         process_menu = menu_bar.addMenu("&Process")
         act_proc_new = QAction("&New...", self)
         act_proc_new.triggered.connect(self.new_process)
@@ -147,16 +162,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.hosts_label)
 
         self.hosts_list = QListWidget()
+        
         # Display hosts as cards in a wrapping grid
         self.hosts_list.setViewMode(self.hosts_list.IconMode)
         self.hosts_list.setResizeMode(self.hosts_list.Adjust)
         self.hosts_list.setMovement(self.hosts_list.Static)
         self.hosts_list.setSpacing(12)
         self.hosts_list.setWordWrap(True)
+        
         # Add padding around the entire grid of host cards
         self.hosts_list.setStyleSheet("QListWidget { padding: 10px; }")
+        
         # Fix each card’s allocated area; width will be recomputed to fit hostnames
-        self._host_card_size = QSize(96, 96)  # initial; will auto-adjust
+        self._host_card_size = QSize(96, 96)  # initial, will auto-adjust
         self.hosts_list.setGridSize(self._host_card_size)
         layout.addWidget(self.hosts_list)
 
@@ -181,15 +199,16 @@ class MainWindow(QMainWindow):
         self.processes_tree.customContextMenuRequested.connect(self._show_process_context_menu)
         layout.addWidget(self.processes_tree)
 
-        # No bottom buttons; use Process menu and right-click context menu
-        #
+        # Double-click to edit (process rows only)
+        self.processes_tree.itemDoubleClicked.connect(self._on_process_tree_double_clicked)
 
-        # after widgets created
         # initial population
         self.load_hosts()
         self.load_processes()
+
         # widen window to show all columns
         self._ensure_min_width()
+
         # ensure theme applied (light by default)
         self.apply_theme()
 
@@ -201,6 +220,7 @@ class MainWindow(QMainWindow):
         total = 0
         for i in range(self.processes_tree.columnCount()):
             total += self.processes_tree.columnWidth(i)
+
         # add some padding for tree indent, borders, and potential scrollbar
         desired = total + 120
         if self.minimumWidth() < desired:
@@ -263,12 +283,38 @@ class MainWindow(QMainWindow):
             return
         try:
             created, errors = load_and_create(fname, self.controller)
-            msg = f"Created: {len(created)}"
+
+            summary = f"File: {fname}\nCreated: {len(created)}\nErrors: {len(errors)}"
+
             if errors:
-                msg += f", Errors: {len(errors)}"
-            QMessageBox.information(self, "Load Complete", msg)
-            self.load_processes() # Refresh the process list
+                # Show details (and also log them)
+                MAX_SHOW = 25
+                lines = []
+                for i, (spec, err) in enumerate(errors[:MAX_SHOW], start=1):
+                    name = (spec or {}).get("name", "<missing>")
+                    host = (spec or {}).get("host", "<missing>")
+                    cmd = (spec or {}).get("exec_command", "<missing>")
+                    lines.append(f"{i:02d}. {name}@{host}\n    exec_command: {cmd}\n    error: {err}")
+
+                if len(errors) > MAX_SHOW:
+                    lines.append(f"\n... plus {len(errors) - MAX_SHOW} more errors ...")
+
+                details = "\n".join(lines)
+                logging.error("Load specs had %d errors from %s\n%s", len(errors), fname, details)
+
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Warning)
+                box.setWindowTitle("Load Complete (with errors)")
+                box.setText(summary)
+                box.setInformativeText("Some specs failed to load. See details for the first errors.")
+                box.setDetailedText(details)
+                box.exec_()
+            else:
+                QMessageBox.information(self, "Load Complete", summary)
+
+            self.load_processes()  # refresh the process list
         except Exception as e:
+            logging.exception("Load failed: %s", e)
             QMessageBox.critical(self, "Error", f"Load failed: {e}")
 
     def load_hosts(self):
@@ -346,129 +392,176 @@ class MainWindow(QMainWindow):
                 # Slightly narrower than grid cell so the border doesn’t clip
                 card.setFixedWidth(new_w - 6)
 
-    def load_processes(self):
-        # Save the expansion state of groups before clearing the tree
-        expansion_state = {}
-        for i in range(self.processes_tree.topLevelItemCount()):
-            item = self.processes_tree.topLevelItem(i)
-            data = item.data(0, Qt.UserRole)
-            if data and data.get("type") == "group":
-                group_name = data.get("name")
-                if group_name:
-                    expansion_state[group_name] = item.isExpanded()
-
-        self.processes_tree.clear()
-        groups = {}
-        for p in self.controller.procs.values():
-            groups.setdefault(p.group or "(ungrouped)", []).append(p)
-
-        for group_name, procs in sorted(groups.items(), key=lambda kv: kv[0].lower()):
-            count = len(procs)
-            g_status, g_cpu_frac, g_mem_mb, g_auto, g_host = self._aggregate_group_stats(procs)
-            g_prio = self._group_priority_str(procs)
-            group_cpu_str = f"{int(round(g_cpu_frac * 100)):d}%"
-            group_mem_str = f"{int(round(g_mem_mb))}"
-            # Note: Host column is index 1
-            group_item = QTreeWidgetItem([f"[{count}] {group_name}", g_host, g_status, group_cpu_str, group_mem_str, g_auto, g_prio])
-            group_item.setFirstColumnSpanned(False)
-            group_item.setData(0, Qt.UserRole, {"type": "group", "name": group_name})
-            # Colorize group row (Status and Auto only)
-            group_item.setForeground(2, QBrush(self._status_color(g_status)))
-            group_item.setForeground(5, QBrush(self._auto_color(g_auto)))
-            self.processes_tree.addTopLevelItem(group_item)
-
-            # Restore the saved expansion state for this group
-            # Default to expanded for new groups
-            is_expanded = expansion_state.get(group_name, True)
-            group_item.setExpanded(is_expanded)
-
-            for proc in sorted(procs, key=lambda p: p.name.lower()):
-                status = self._proc_status(proc)
-                cpu = float(getattr(proc, "cpu", 0.0) or 0.0)
-                cpu_str = f"{cpu*100:.1f}%"
-                mem_mb = self._mem_mb(proc)
-                auto = "Yes" if getattr(proc, "auto_restart", False) else "No"
-                host_name = getattr(proc, "hostname", "") or ""
-                prio_str = self._proc_priority(proc)
-                # Order: name, host, status, cpu, mem, auto, priority
-                child = QTreeWidgetItem([proc.name, host_name, status, cpu_str, f"{int(round(mem_mb))}", auto, prio_str])
-                child.setData(0, Qt.UserRole, {"type": "proc", "name": proc.name, "host": host_name})
-                # Colorize process row (Status and Auto only)
-                child.setForeground(2, QBrush(self._status_color(status)))
-                child.setForeground(5, QBrush(self._auto_color(auto)))
-                group_item.addChild(child)
-
-        # self.processes_tree.expandAll() # This is the line causing the issue
-        # self._ensure_min_width() # No longer needed here
-
-    def _proc_priority(self, proc) -> str:
-        val = getattr(proc, "priority", None)
-        if val is None:
-            val = getattr(proc, "prio", None)
-        if val is None:
-            return ""
-        try:
-            return str(int(val))
-        except Exception:
-            return str(val)
-    
-    def _group_priority_str(self, procs) -> str:
-        vals = []
-        for p in procs:
-            v = getattr(p, "priority", None)
-            if v is None:
-                v = getattr(p, "prio", None)
-            if v is not None:
-                try:
-                    v = int(v)
-                except Exception:
-                    pass
-                vals.append(v)
-        if not vals:
-            return ""
-        unique = set(vals)
-        return str(next(iter(unique))) if len(unique) == 1 else "Mixed"
-
-    def _ensure_min_width(self):
-        total = 0
-        for i in range(self.processes_tree.columnCount()):
-            total += self.processes_tree.columnWidth(i)
-        # add some padding for tree indent, borders, and potential scrollbar
-        desired = total + 120
-        if self.minimumWidth() < desired:
-            self.setMinimumWidth(desired)
-        if self.width() < desired:
-            self.resize(desired, self.height())
-
-    def refresh_all(self):
-        sel_host = self._selected_host()
-        # preserve selected proc name if any
+    def refresh_processes_in_place(self) -> None:
+        """
+        Incremental update of processes_tree:
+          - No clear/rebuild
+          - Preserves expansion state + selection
+          - Updates only changed rows
+        """
+        # Preserve selection (proc name if a proc is selected)
         sel_proc_name = None
         cur_item = self.processes_tree.currentItem()
         if cur_item:
             d = cur_item.data(0, Qt.UserRole)
             if isinstance(d, dict) and d.get("type") == "proc":
                 sel_proc_name = d.get("name")
-        # reload
+
+        # Build group -> procs mapping from controller snapshot
+        groups = {}
+        for p in self.controller.procs.values():
+            groups.setdefault(getattr(p, "group", None) or "(ungrouped)", []).append(p)
+
+        seen_groups = set()
+        seen_procs = set()
+
+        # Upsert groups + procs
+        for group_name, procs in sorted(groups.items(), key=lambda kv: kv[0].lower()):
+            seen_groups.add(group_name)
+
+            g_item = self._group_items.get(group_name)
+            if g_item is None:
+                g_item = QTreeWidgetItem()
+                self.processes_tree.addTopLevelItem(g_item)
+                g_item.setExpanded(True)  # default expanded for new groups
+                self._group_items[group_name] = g_item
+
+            # Update group row
+            self._set_group_row(g_item, group_name, procs)
+
+            # Ensure children are sorted by proc name (stable UX)
+            for proc in sorted(procs, key=lambda p: p.name.lower()):
+                pname = proc.name
+                if not pname:
+                    continue
+                seen_procs.add(pname)
+
+                p_item = self._proc_items.get(pname)
+                if p_item is None:
+                    p_item = QTreeWidgetItem()
+                    self._proc_items[pname] = p_item
+                    g_item.addChild(p_item)
+                else:
+                    # Re-parent if group changed
+                    if p_item.parent() is not g_item:
+                        old_parent = p_item.parent()
+                        if old_parent is not None:
+                            old_parent.removeChild(p_item)
+                        g_item.addChild(p_item)
+
+                self._set_proc_row(p_item, proc, group_name)
+
+        # Remove stale proc items
+        for pname, p_item in list(self._proc_items.items()):
+            if pname not in seen_procs:
+                parent = p_item.parent()
+                if parent is not None:
+                    parent.removeChild(p_item)
+                del self._proc_items[pname]
+
+        # Remove empty/stale group items
+        for group_name, g_item in list(self._group_items.items()):
+            if group_name not in seen_groups or g_item.childCount() == 0:
+                idx = self.processes_tree.indexOfTopLevelItem(g_item)
+                if idx >= 0:
+                    self.processes_tree.takeTopLevelItem(idx)
+                del self._group_items[group_name]
+
+        # Restore selection if possible
+        if sel_proc_name and sel_proc_name in self._proc_items:
+            self.processes_tree.setCurrentItem(self._proc_items[sel_proc_name])
+
+    def _set_group_row(self, item: QTreeWidgetItem, group_name: str, procs: list) -> None:
+        count = len(procs)
+        g_status, g_cpu_frac, g_mem_mb, g_auto, g_host = self._aggregate_group_stats(procs)
+        g_prio = self._group_priority_str(procs)
+        group_cpu_str = f"{int(round(g_cpu_frac * 100)):d}%"
+        group_mem_str = f"{g_mem_mb:.1f}"  # <-- 1 decimal
+
+        item.setText(0, f"[{count}] {group_name}")
+        item.setText(1, g_host)
+        item.setText(2, g_status)
+        item.setText(3, group_cpu_str)
+        item.setText(4, group_mem_str)     # <-- 1 decimal
+        item.setText(5, g_auto)
+        item.setText(6, g_prio)
+
+        item.setData(0, Qt.UserRole, {"type": "group", "name": group_name})
+        item.setForeground(2, QBrush(self._status_color(g_status)))
+        item.setForeground(5, QBrush(self._auto_color(g_auto)))
+
+    def _set_proc_row(self, item: QTreeWidgetItem, proc, group_name: str) -> None:
+        status = self._proc_status(proc)
+        cpu = float(getattr(proc, "cpu", 0.0) or 0.0)
+        cpu_str = f"{cpu * 100:.1f}%"
+        mem_mb = self._mem_mb(proc)
+        auto = "Yes" if getattr(proc, "auto_restart", False) else "No"
+        host_name = getattr(proc, "hostname", "") or ""
+        prio_str = self._proc_priority(proc)  # <-- will now show '-' if not running, and annotate RT
+
+        item.setText(0, proc.name)
+        item.setText(1, host_name)
+        item.setText(2, status)
+        item.setText(3, cpu_str)
+        item.setText(4, f"{mem_mb:.1f}")      # <-- 1 decimal
+        item.setText(5, auto)
+        item.setText(6, prio_str)
+
+        item.setData(0, Qt.UserRole, {"type": "proc", "name": proc.name, "host": host_name, "group": group_name})
+        item.setForeground(2, QBrush(self._status_color(status)))
+        item.setForeground(5, QBrush(self._auto_color(auto)))
+
+    def _proc_priority(self, proc) -> str:
+        """
+        Show priority only for running processes.
+        Do NOT use negative priority as a proxy for "not running" because RT uses negatives (e.g. -40).
+        """
+        status = self._proc_status(proc).lower()
+        state = (getattr(proc, "state", "") or "").strip().upper()
+        is_running = (status == "running") or (state == "R")
+
+        if not is_running:
+            return "-"
+
+        pr = getattr(proc, "priority", None)
+        try:
+            pr_i = int(pr) if pr is not None else -1
+        except Exception:
+            pr_i = -1
+
+        if pr_i == -1:
+            return "-"
+
+        if bool(getattr(proc, "realtime", False)):
+            # Node publishes RT as negative (e.g. -40). Display as “-40 (RT)”.
+            return f"{pr_i} (RT)"
+
+        return str(pr_i)
+
+    def _group_priority_str(self, procs) -> str:
+        """
+        Group-level priority: intentionally blank (no aggregation).
+        """
+        return ""
+
+    def load_processes(self):
+        # Single canonical implementation (remove the duplicate definition later in the file)
+        self.refresh_processes_in_place()
+
+    def refresh_all(self):
+        sel_host = self._selected_host()
+
+        # refresh
         self.load_hosts()
-        self.load_processes()
-        # restore selections
+        self.refresh_processes_in_place()
+
+        # restore host selection
         if sel_host:
             for i in range(self.hosts_list.count()):
                 it = self.hosts_list.item(i)
                 if it.data(Qt.UserRole) == sel_host:
                     self.hosts_list.setCurrentItem(it)
                     break
-        if sel_proc_name:
-            # search tree for a child with matching name
-            top_count = self.processes_tree.topLevelItemCount()
-            for i in range(top_count):
-                top = self.processes_tree.topLevelItem(i)
-                for j in range(top.childCount()):
-                    child = top.child(j)
-                    if child.text(0) == sel_proc_name:
-                        self.processes_tree.setCurrentItem(child)
-                        break
 
     def start_process(self):
         proc_name = self._selected_proc()
@@ -481,7 +574,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.start_proc(proc_name, host_name)
-            self.load_processes()
+            self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to start process: {e}")
 
@@ -496,7 +589,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.stop_proc(proc_name, host_name)
-            self.load_processes()
+            self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to stop process: {e}")
 
@@ -536,31 +629,18 @@ class MainWindow(QMainWindow):
                     w.activateWindow()
                     return
             except RuntimeError:
-                # Stale reference; remove and recreate
                 self.output_windows.pop(proc_name, None)
 
-        # Optional initial text (stdout + stderr)
-        init_text = ""
-        try:
-            msg = getattr(self.controller, "proc_outputs", {}).get(proc_name)
-        except Exception:
-            msg = None
-        if msg is not None:
-            out = getattr(msg, "stdout", None) or getattr(msg, "output", None) or getattr(msg, "text", None) or ""
-            err = getattr(msg, "stderr", None) or getattr(msg, "err", None) or ""
-            init_text = out
-            if err:
-                if init_text and not init_text.endswith("\n"):
-                    init_text += "\n"
-                init_text += "[stderr]\n" + err
+        # Fetch full current buffer for this proc without copying whole dicts
+        initial_text = ""
+        if hasattr(self.controller, "get_proc_output_delta"):
+            _gen, initial_text, _reset, _cur_len = self.controller.get_proc_output_delta(
+                proc_name, last_gen=-1, last_len=0
+            )
 
-        # Create modeless window that self-updates from controller
-        w = ProcessOutput(proc_name, init_text, self.controller, None)
-        w.setWindowModality(Qt.NonModal)
-        w.setAttribute(Qt.WA_DeleteOnClose, True)
-        self.output_windows[proc_name] = w
-        w.destroyed.connect(lambda _: self.output_windows.pop(proc_name, None))
-        w.show()
+        dlg = ProcessOutput(proc_name, initial_text=initial_text, controller=self.controller, parent=self)
+        self.output_windows[proc_name] = dlg
+        dlg.show()
 
     # --- Context-menu direct helpers ---
     def _start_proc_direct(self, proc_name: str, host_name: str = None):
@@ -657,6 +737,90 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to stop local node: {e}")
 
+    def show_process_output(self):
+        # Avoid item.text(0) (can be group label); always use the stored UserRole data
+        proc_name = self._selected_proc()
+        if not proc_name:
+            return
+        self._open_output_window(proc_name)
+
+    # --- Selection helpers ---
+    def _selected_host(self):
+        it = self.hosts_list.currentItem()
+        return it.data(Qt.UserRole) if it is not None else None
+
+    def _selected_proc(self):
+        item = self.processes_tree.currentItem()
+        if not item:
+            return None
+        data = item.data(0, Qt.UserRole)
+        if isinstance(data, dict) and data.get("type") == "proc":
+            return data.get("name")
+        return None
+
+    def _aggregate_group_stats(self, procs):
+        """Return (status, avg_cpu_frac, total_mem_mb, auto_str, host_str)."""
+        if not procs:
+            return ("Ready", 0.0, 0.0, "No", "")
+
+        # Group Status with TUI-like rules:
+        # - Running if ALL are running
+        # - Ready   if ALL are ready
+        # - Mixed   otherwise
+        def _is_running(p):
+            st_char = getattr(p, "state", None)
+            if isinstance(st_char, str) and st_char.upper() == "R":
+                return True
+            return self._proc_status(p).lower() == "running"
+
+        def _is_ready(p):
+            st_char = getattr(p, "state", None)
+            if isinstance(st_char, str) and st_char.upper() == "T":
+                return True
+            return self._proc_status(p).lower() == "ready"
+
+        all_running = all(_is_running(p) for p in procs)
+        all_ready = all(_is_ready(p) for p in procs)
+        g_status = "Running" if all_running else ("Ready" if all_ready else "Mixed")
+
+        # CPU: average of available cpu fractions (0..1)
+        cpu_vals = []
+        for p in procs:
+            try:
+                c = getattr(p, "cpu", None)
+                if c is None:
+                    c = getattr(p, "cpu_usage", None)
+                if c is not None:
+                    cpu_vals.append(float(c))
+            except Exception:
+                pass
+        g_cpu_frac = (sum(cpu_vals) / len(cpu_vals)) if cpu_vals else 0.0
+
+        # MEM: sum of per-proc MB
+        mem_vals = []
+        for p in procs:
+            try:
+                mem_vals.append(float(self._mem_mb(p)))
+            except Exception:
+                pass
+        g_mem_mb = sum(mem_vals) if mem_vals else 0.0
+
+        # Auto: Yes/No/Mixed based on auto_restart
+        autos = [bool(getattr(p, "auto_restart", False)) for p in procs]
+        if all(autos):
+            g_auto = "Yes"
+        elif any(autos):
+            g_auto = "Mixed"
+        else:
+            g_auto = "No"
+
+        # Host: single host if uniform, else "(multiple)"
+        hosts = {getattr(p, "hostname", "") or "" for p in procs}
+        g_host = next(iter(hosts)) if len(hosts) == 1 else "(multiple)"
+
+        return (g_status, g_cpu_frac, g_mem_mb, g_auto, g_host)
+
+    # --- Per-process helpers used by the table ---
     def _proc_status(self, proc) -> str:
         """Best-effort status string from the process object."""
         try:
@@ -841,148 +1005,20 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-    # --- Selection helpers ---
-    def _selected_host(self):
-        it = self.hosts_list.currentItem()
-        return it.data(Qt.UserRole) if it is not None else None
+    def _on_process_tree_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+        if item is None:
+            return
 
-    def _selected_proc(self):
-        item = self.processes_tree.currentItem()
-        if not item:
-            return None
         data = item.data(0, Qt.UserRole)
-        if isinstance(data, dict) and data.get("type") == "proc":
-            return data.get("name")
-        return None
+        if not isinstance(data, dict):
+            return
 
-    def _aggregate_group_stats(self, procs):
-        """Return (status, avg_cpu_frac, total_mem_mb, auto_str, host_str)."""
-        if not procs:
-            return ("Ready", 0.0, 0.0, "No", "")
+        # Only edit real process rows, never group rows
+        if data.get("type") != "proc":
+            return
 
-        # Group Status with TUI-like rules:
-        # - Running if ALL are running
-        # - Ready   if ALL are ready
-        # - Mixed   otherwise
-        def _is_running(p):
-            st_char = getattr(p, "state", None)
-            if isinstance(st_char, str) and st_char.upper() == "R":
-                return True
-            return self._proc_status(p).lower() == "running"
+        proc_name = data.get("name")
+        if not proc_name:
+            return
 
-        def _is_ready(p):
-            st_char = getattr(p, "state", None)
-            if isinstance(st_char, str) and st_char.upper() == "T":
-                return True
-            return self._proc_status(p).lower() == "ready"
-
-        all_running = all(_is_running(p) for p in procs)
-        all_ready = all(_is_ready(p) for p in procs)
-        g_status = "Running" if all_running else ("Ready" if all_ready else "Mixed")
-
-        # CPU: average of available cpu fractions (0..1)
-        cpu_vals = []
-        for p in procs:
-            try:
-                c = getattr(p, "cpu", None)
-                if c is None:
-                    c = getattr(p, "cpu_usage", None)
-                if c is not None:
-                    cpu_vals.append(float(c))
-            except Exception:
-                pass
-        g_cpu_frac = (sum(cpu_vals) / len(cpu_vals)) if cpu_vals else 0.0
-
-        # MEM: sum of per-proc MB
-        mem_vals = []
-        for p in procs:
-            try:
-                mem_vals.append(float(self._mem_mb(p)))
-            except Exception:
-                pass
-        g_mem_mb = sum(mem_vals) if mem_vals else 0.0
-
-        # Auto: Yes/No/Mixed based on auto_restart
-        autos = [bool(getattr(p, "auto_restart", False)) for p in procs]
-        if all(autos):
-            g_auto = "Yes"
-        elif any(autos):
-            g_auto = "Mixed"
-        else:
-            g_auto = "No"
-
-        # Host: single host if uniform, else "(multiple)"
-        hosts = {getattr(p, "hostname", "") or "" for p in procs}
-        g_host = next(iter(hosts)) if len(hosts) == 1 else "(multiple)"
-
-        return (g_status, g_cpu_frac, g_mem_mb, g_auto, g_host)
-
-    # --- Per-process helpers used by the table ---
-    def _proc_status(self, proc) -> str:
-        """Best-effort status string from the process object."""
-        try:
-            s = getattr(proc, "status", None) or getattr(proc, "state", None) or ""
-            if isinstance(s, str):
-                s = s.strip()
-                if len(s) == 1:
-                    mapped = STATE_NAME_MAP.get(s.upper())
-                    if mapped:
-                        return mapped
-                if s:
-                    return s.capitalize()
-            running = getattr(proc, "running", None)
-            if isinstance(running, bool):
-                return "Running" if running else "Stopped"
-        except Exception:
-            pass
-        return "Ready"
-
-    def _mem_mb(self, proc) -> float:
-        """Return memory usage in MB. Tries various common fields."""
-        try:
-            v = getattr(proc, "mem_rss", None)  # kB from LCM
-            if v is not None:
-                return float(v) / 1024.0
-            for name in ("mem_mb", "memory_mb", "rss_mb"):
-                v = getattr(proc, name, None)
-                if v is not None:
-                    return float(v)
-            for name in ("mem_bytes", "memory_bytes", "rss_bytes", "rss"):
-                v = getattr(proc, name, None)
-                if v is not None:
-                    return float(v) / (1024.0 * 1024.0)
-            v = getattr(proc, "mem", None)
-            if v is not None:
-                v = float(v)
-                return v / (1024.0 * 1024.0) if v > 4096.0 else v
-        except Exception:
-            pass
-        return 0.0
-
-    def _status_color(self, status_str: str) -> QColor:
-        s = (status_str or "").lower()
-        if s == "running":
-            return COLOR_GREEN
-        if s in ("stopped", "failed", "killed", "error"):
-            return COLOR_RED
-        if s == "mixed":
-            return COLOR_YELLOW
-        if s in ("ready",) or s.startswith("exited"):
-            return COLOR_GRAY
-        return COLOR_GRAY
-
-    def _auto_color(self, auto_str: str) -> QColor:
-        s = (auto_str or "").lower()
-        if s == "yes":
-            return COLOR_GREEN
-        if s == "mixed":
-            return COLOR_YELLOW
-        return COLOR_GRAY
-
-    def _usage_color(self, pct: int) -> QColor:
-        """Green < 40%, Yellow 40–70%, Red > 70%."""
-        if pct < 40:
-            return COLOR_GREEN
-        if pct <= 70:
-            return COLOR_YELLOW
-        return COLOR_RED
+        self._edit_proc_direct(proc_name)
