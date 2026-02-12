@@ -1,11 +1,14 @@
-import os
-import time
-import yaml
-import lcm
-import threading
+"""Controller that publishes commands and aggregates node telemetry for the GUI."""
+
 import logging
+import os
+import threading
+import time
 from typing import Dict, Optional, Tuple
 
+import yaml
+
+import lcm
 
 try:
     from dpm_msgs import (
@@ -84,9 +87,13 @@ class Controller:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f) or {}
         except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing YAML configuration file {config_path}: {e}")
+            raise ValueError(
+                f"Error parsing YAML configuration file {config_path}: {e}"
+            ) from e
         except Exception as e:
-            raise RuntimeError(f"Unexpected error loading configuration file {config_path}: {e}")
+            raise RuntimeError(
+                f"Unexpected error loading configuration file {config_path}: {e}"
+            ) from e
 
         required = [
             "command_channel",
@@ -136,19 +143,23 @@ class Controller:
     # -----------------
     # LCM handlers (background thread)
     # -----------------
-    def host_info_handler(self, channel, data) -> None:
+    def host_info_handler(self, _channel, data) -> None:
         msg = host_info_t.decode(data)
         with self._hosts_lock:
             self._hosts[msg.hostname] = msg
 
-    def host_procs_handler(self, channel, data) -> None:
+    def host_procs_handler(self, _channel, data) -> None:
         msg = host_procs_t.decode(data)
         hostname = msg.hostname
 
         # Update atomically under lock (avoid GUI races)
         with self._procs_lock:
             # remove old procs for this host that are not in the new set
-            existing_names = [n for (n, p) in self._procs.items() if getattr(p, "hostname", "") == hostname]
+            existing_names = [
+                n
+                for (n, p) in self._procs.items()
+                if getattr(p, "hostname", "") == hostname
+            ]
             new_names = {p.name for p in msg.procs}
             for n in existing_names:
                 if n not in new_names:
@@ -158,7 +169,7 @@ class Controller:
             for p in msg.procs:
                 self._procs[p.name] = p
 
-    def proc_outputs_handler(self, channel, data) -> None:
+    def proc_outputs_handler(self, _channel, data) -> None:
         msg = proc_output_t.decode(data)
         name = msg.name
 
@@ -187,12 +198,16 @@ class Controller:
             MAX_BYTES = 2 * 1024 * 1024  # 2MB per proc
             if len(buf) > MAX_BYTES:
                 buf = buf[-MAX_BYTES:]
-                self._proc_output_buffer_gen[name] = self._proc_output_buffer_gen.get(name, 0) + 1
+                self._proc_output_buffer_gen[name] = (
+                    self._proc_output_buffer_gen.get(name, 0) + 1
+                )
 
             self._proc_output_buffers[name] = buf
             self._proc_output_buffer_gen.setdefault(name, 0)
 
-    def get_proc_output_delta(self, proc_name: str, last_gen: int, last_len: int) -> Tuple[int, str, bool, int]:
+    def get_proc_output_delta(
+        self, proc_name: str, last_gen: int, last_len: int
+    ) -> Tuple[int, str, bool, int]:
         """
         Thread-safe per-process accessor to avoid copying the full outputs dict.
 
@@ -238,46 +253,54 @@ class Controller:
             raise RuntimeError("LCM publisher not initialized.")
         self.lc_pub.publish(self.command_channel, msg.encode())
 
-    def create_proc(self, cmd_name, proc_cmd, group, host, auto_restart=False, realtime=False) -> None:
+    def create_proc(
+        self,
+        cmd_name: str,
+        proc_cmd: str,
+        group: str,
+        host: str,
+        auto_restart: bool = False,
+        realtime: bool = False,
+    ) -> None:
         msg = command_t()
         msg.name = cmd_name
         msg.group = group
         msg.hostname = host
         msg.action = "create_process"
-        msg.exec_command = proc_cmd  
+        msg.exec_command = proc_cmd
         msg.auto_restart = bool(auto_restart)
         msg.realtime = bool(realtime)
         self._publish(msg)
 
-    def start_proc(self, cmd_name, host) -> None:
+    def start_proc(self, cmd_name: str, host: str) -> None:
         msg = command_t()
         msg.name = cmd_name
         msg.hostname = host
         msg.action = "start_process"
         self._publish(msg)
 
-    def stop_proc(self, cmd_name, host) -> None:
+    def stop_proc(self, cmd_name: str, host: str) -> None:
         msg = command_t()
         msg.name = cmd_name
         msg.hostname = host
         msg.action = "stop_process"
         self._publish(msg)
 
-    def del_proc(self, cmd_name, host) -> None:
+    def del_proc(self, cmd_name: str, host: str) -> None:
         msg = command_t()
         msg.name = cmd_name
         msg.hostname = host
         msg.action = "delete_process"
         self._publish(msg)
 
-    def start_group(self, group, host) -> None:
+    def start_group(self, group: str, host: str) -> None:
         msg = command_t()
         msg.group = group
         msg.hostname = host
         msg.action = "start_group"
         self._publish(msg)
 
-    def stop_group(self, group, host) -> None:
+    def stop_group(self, group: str, host: str) -> None:
         msg = command_t()
         msg.group = group
         msg.hostname = host

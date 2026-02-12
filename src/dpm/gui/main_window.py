@@ -1,16 +1,34 @@
-from PyQt5.QtWidgets import (
-    QMainWindow, QVBoxLayout, QWidget, QListWidget, QListWidgetItem,
-    QPushButton, QHBoxLayout, QLabel, QMessageBox, QAction, QFileDialog,
-    QTreeWidget, QTreeWidgetItem, QMenu, QFrame, QApplication
-)
-from PyQt5.QtCore import Qt, QSize, QTimer
-from PyQt5.QtGui import QColor, QBrush, QFontMetrics, QPalette
-from .process_dialog import ProcessDialog
-from .process_output import ProcessOutput
-from dpm.spec_io import save_all_process_specs, load_and_create
+"""Main GUI window for the DPM controller."""
+
+import logging
 import os
 import time
-import logging
+
+from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtGui import QBrush, QColor, QFontMetrics, QPalette
+from PyQt5.QtWidgets import (
+    QAction,
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from dpm.spec_io import load_and_create, save_all_process_specs
+
+from .process_dialog import ProcessDialog
+from .process_output import ProcessOutput
+
+logger = logging.getLogger(__name__)
 
 # status mapping from single-letter state codes
 STATE_NAME_MAP = {
@@ -19,16 +37,17 @@ STATE_NAME_MAP = {
     "S": "Stopped",
     "F": "Failed",
     "K": "Killed",
-    "E": "Exited",  
+    "E": "Exited",
 }
 
 HOST_OFFLINE_THRESHOLD_SEC = 5
 
-# Color palette 
-COLOR_GREEN = QColor(46, 204, 113)   # Running / Yes / Low usage
-COLOR_RED = QColor(231, 76, 60)      # Stopped / Failed / Killed / Offline / High usage
+# Color palette
+COLOR_GREEN = QColor(46, 204, 113)  # Running / Yes / Low usage
+COLOR_RED = QColor(231, 76, 60)  # Stopped / Failed / Killed / Offline / High usage
 COLOR_YELLOW = QColor(241, 196, 15)  # Mixed / Medium usage
-COLOR_GRAY = QColor(127, 140, 141)   # Ready / Exited / No
+COLOR_GRAY = QColor(127, 140, 141)  # Ready / Exited / No
+
 
 # Simple “card” widget for host stats
 class HostCard(QFrame):
@@ -46,15 +65,15 @@ class HostCard(QFrame):
         self.status.setObjectName("StatLabel")
         self.mem = QLabel("", self)
         self.mem.setObjectName("StatLabel")
-        self.mem.setTextFormat(Qt.RichText)   
+        self.mem.setTextFormat(Qt.RichText)
         self.cpu = QLabel("", self)
         self.cpu.setObjectName("StatLabel")
-        self.cpu.setTextFormat(Qt.RichText)   
+        self.cpu.setTextFormat(Qt.RichText)
         self.v.addWidget(self.title)
         self.v.addWidget(self.status)
         self.v.addWidget(self.mem)
         self.v.addWidget(self.cpu)
-        self.set_theme(dark=False) 
+        self.set_theme(dark=False)
 
     def set_theme(self, dark: bool):
         if dark:
@@ -80,16 +99,25 @@ class HostCard(QFrame):
                 #StatLabel { color: #000; font-size: 10px; }  /* smaller stats text */
             """)
 
-    def set_data(self, host: str, online: bool, cpu_pct: int, mem_pct: int, usage_color_fn):
+    def set_data(
+        self, host: str, online: bool, cpu_pct: int, mem_pct: int, usage_color_fn
+    ):
         self.title.setText(host)
         self.status.setText("Online" if online else "Offline")
-        self.status.setStyleSheet(f"color: {(COLOR_GREEN if online else COLOR_RED).name()}")
+        self.status.setStyleSheet(
+            f"color: {(COLOR_GREEN if online else COLOR_RED).name()}"
+        )
 
         mem_color = usage_color_fn(mem_pct).name()
         cpu_color = usage_color_fn(cpu_pct).name()
         # Color only the numbers using rich text
-        self.mem.setText(f"Mem usage: <span style='color:{mem_color}'>{mem_pct}%</span>")
-        self.cpu.setText(f"Cpu usage: <span style='color:{cpu_color}'>{cpu_pct}%</span>")
+        self.mem.setText(
+            f"Mem usage: <span style='color:{mem_color}'>{mem_pct}%</span>"
+        )
+        self.cpu.setText(
+            f"Cpu usage: <span style='color:{cpu_color}'>{cpu_pct}%</span>"
+        )
+
 
 class MainWindow(QMainWindow):
     def __init__(self, controller, *args, **kwargs):
@@ -97,7 +125,7 @@ class MainWindow(QMainWindow):
         self.controller = controller
         # Keep modeless output windows alive (one per proc)
         self.output_windows = {}
-        
+
         # Keep and reuse host cards to avoid flicker/resize jumps
         self._host_item_map = {}  # host -> (QListWidgetItem, HostCard)
         self.dark_mode = False
@@ -106,19 +134,19 @@ class MainWindow(QMainWindow):
 
         # caches for update-in-place process tree ----
         self._group_items = {}  # group_name -> QTreeWidgetItem (top-level)
-        self._proc_items = {}   # proc_name  -> QTreeWidgetItem (child)
+        self._proc_items = {}  # proc_name  -> QTreeWidgetItem (child)
         # ------------------------------------------------------
 
         # Create a menu bar
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        
+
         # Black mode toggle
         self.black_action = QAction("&Black Mode", self, checkable=True)
         self.black_action.toggled.connect(self.toggle_black_mode)
         file_menu.addAction(self.black_action)
         file_menu.addSeparator()
-        
+
         # Quit
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
@@ -144,7 +172,7 @@ class MainWindow(QMainWindow):
         stop_action.triggered.connect(self.stop_local_node)
         node_menu.addAction(stop_action)
 
-        # Process menu 
+        # Process menu
         process_menu = menu_bar.addMenu("&Process")
         act_proc_new = QAction("&New...", self)
         act_proc_new.triggered.connect(self.new_process)
@@ -162,17 +190,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.hosts_label)
 
         self.hosts_list = QListWidget()
-        
+
         # Display hosts as cards in a wrapping grid
         self.hosts_list.setViewMode(self.hosts_list.IconMode)
         self.hosts_list.setResizeMode(self.hosts_list.Adjust)
         self.hosts_list.setMovement(self.hosts_list.Static)
         self.hosts_list.setSpacing(12)
         self.hosts_list.setWordWrap(True)
-        
+
         # Add padding around the entire grid of host cards
         self.hosts_list.setStyleSheet("QListWidget { padding: 10px; }")
-        
+
         # Fix each card’s allocated area; width will be recomputed to fit hostnames
         self._host_card_size = QSize(96, 96)  # initial, will auto-adjust
         self.hosts_list.setGridSize(self._host_card_size)
@@ -184,7 +212,9 @@ class MainWindow(QMainWindow):
         # Tree table: Group/Proc, Host, Status, CPU, MEM, Auto, Priority
         self.processes_tree = QTreeWidget()
         self.processes_tree.setColumnCount(7)
-        self.processes_tree.setHeaderLabels(["Group/Proc", "Host", "Status", "CPU", "MEM (MB)", "Auto", "Priority"])
+        self.processes_tree.setHeaderLabels(
+            ["Group/Proc", "Host", "Status", "CPU", "MEM (MB)", "Auto", "Priority"]
+        )
         self.processes_tree.setRootIsDecorated(True)
         self.processes_tree.setAlternatingRowColors(True)
         self.processes_tree.setColumnWidth(0, 300)
@@ -196,11 +226,15 @@ class MainWindow(QMainWindow):
         self.processes_tree.setColumnWidth(6, 80)
         # Right-click context menu on process tree
         self.processes_tree.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.processes_tree.customContextMenuRequested.connect(self._show_process_context_menu)
+        self.processes_tree.customContextMenuRequested.connect(
+            self._show_process_context_menu
+        )
         layout.addWidget(self.processes_tree)
 
         # Double-click to edit (process rows only)
-        self.processes_tree.itemDoubleClicked.connect(self._on_process_tree_double_clicked)
+        self.processes_tree.itemDoubleClicked.connect(
+            self._on_process_tree_double_clicked
+        )
 
         # initial population
         self.load_hosts()
@@ -252,7 +286,9 @@ class MainWindow(QMainWindow):
             pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
             app.setPalette(pal)
             # Widgets specific
-            self.processes_tree.setStyleSheet("QTreeWidget { background:#1e1e1e; color:#e0e0e0; }")
+            self.processes_tree.setStyleSheet(
+                "QTreeWidget { background:#1e1e1e; color:#e0e0e0; }"
+            )
             self.hosts_list.setStyleSheet("QListWidget { background:#1e1e1e; }")
             # Update existing cards
             for _, card in self._host_item_map.values():
@@ -267,18 +303,26 @@ class MainWindow(QMainWindow):
 
     def save_all_processes(self):
         default_path = os.path.join("saved", "processes.yml")
-        fname, _ = QFileDialog.getSaveFileName(self, "Save All Specs", default_path, "YAML Files (*.yml *.yaml)")
+        fname, _ = QFileDialog.getSaveFileName(
+            self, "Save All Specs", default_path, "YAML Files (*.yml *.yaml)"
+        )
         if not fname:
             return
         try:
-            written, skipped = save_all_process_specs(fname, self.controller, append=False)
-            QMessageBox.information(self, "Success", f"Saved {written} specs, skipped {skipped}.")
+            written, skipped = save_all_process_specs(
+                fname, self.controller, append=False
+            )
+            QMessageBox.information(
+                self, "Success", f"Saved {written} specs, skipped {skipped}."
+            )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Save failed: {e}")
 
     def load_processes_from_file(self):
         default_path = os.path.join("saved", "processes.yml")
-        fname, _ = QFileDialog.getOpenFileName(self, "Load Specs", default_path, "YAML Files (*.yml *.yaml)")
+        fname, _ = QFileDialog.getOpenFileName(
+            self, "Load Specs", default_path, "YAML Files (*.yml *.yaml)"
+        )
         if not fname:
             return
         try:
@@ -294,19 +338,25 @@ class MainWindow(QMainWindow):
                     name = (spec or {}).get("name", "<missing>")
                     host = (spec or {}).get("host", "<missing>")
                     cmd = (spec or {}).get("exec_command", "<missing>")
-                    lines.append(f"{i:02d}. {name}@{host}\n    exec_command: {cmd}\n    error: {err}")
+                    lines.append(
+                        f"{i:02d}. {name}@{host}\n    exec_command: {cmd}\n    error: {err}"
+                    )
 
                 if len(errors) > MAX_SHOW:
                     lines.append(f"\n... plus {len(errors) - MAX_SHOW} more errors ...")
 
                 details = "\n".join(lines)
-                logging.error("Load specs had %d errors from %s\n%s", len(errors), fname, details)
+                logging.error(
+                    "Load specs had %d errors from %s\n%s", len(errors), fname, details
+                )
 
                 box = QMessageBox(self)
                 box.setIcon(QMessageBox.Warning)
                 box.setWindowTitle("Load Complete (with errors)")
                 box.setText(summary)
-                box.setInformativeText("Some specs failed to load. See details for the first errors.")
+                box.setInformativeText(
+                    "Some specs failed to load. See details for the first errors."
+                )
                 box.setDetailedText(details)
                 box.exec_()
             else:
@@ -333,7 +383,11 @@ class MainWindow(QMainWindow):
             try:
                 mem_total = float(getattr(info, "mem_total", 0) or 0.0)
                 mem_used = float(getattr(info, "mem_used", 0) or 0.0)
-                mem_frac = (mem_used / mem_total) if mem_total else float(getattr(info, "mem_usage", 0.0) or 0.0)
+                mem_frac = (
+                    (mem_used / mem_total)
+                    if mem_total
+                    else float(getattr(info, "mem_usage", 0.0) or 0.0)
+                )
             except Exception:
                 mem_frac = float(getattr(info, "mem_usage", 0.0) or 0.0)
 
@@ -355,7 +409,13 @@ class MainWindow(QMainWindow):
             else:
                 item, card = tup
             # Update content only
-            card.set_data(host, online=not offline, cpu_pct=cpu_pct, mem_pct=mem_pct, usage_color_fn=self._usage_color)
+            card.set_data(
+                host,
+                online=not offline,
+                cpu_pct=cpu_pct,
+                mem_pct=mem_pct,
+                usage_color_fn=self._usage_color,
+            )
 
         # Remove cards for hosts no longer present
         stale = [h for h in self._host_item_map.keys() if h not in seen_hosts]
@@ -379,7 +439,7 @@ class MainWindow(QMainWindow):
 
         # Compute padding: layout (10+10) + frame padding (8+8) + borders (1+1) + small fudge
         padding = 10 + 10 + 8 + 8 + 1 + 1 + 8  # = 46 px
-        new_w = max(160, longest + padding)    # enforce a sensible minimum
+        new_w = max(160, longest + padding)  # enforce a sensible minimum
 
         # Keep the existing height; derive from any card sizeHint if you prefer dynamic
         new_size = QSize(new_w, self._host_card_size.height())
@@ -471,9 +531,13 @@ class MainWindow(QMainWindow):
         if sel_proc_name and sel_proc_name in self._proc_items:
             self.processes_tree.setCurrentItem(self._proc_items[sel_proc_name])
 
-    def _set_group_row(self, item: QTreeWidgetItem, group_name: str, procs: list) -> None:
+    def _set_group_row(
+        self, item: QTreeWidgetItem, group_name: str, procs: list
+    ) -> None:
         count = len(procs)
-        g_status, g_cpu_frac, g_mem_mb, g_auto, g_host = self._aggregate_group_stats(procs)
+        g_status, g_cpu_frac, g_mem_mb, g_auto, g_host = self._aggregate_group_stats(
+            procs
+        )
         g_prio = self._group_priority_str(procs)
         group_cpu_str = f"{int(round(g_cpu_frac * 100)):d}%"
         group_mem_str = f"{g_mem_mb:.1f}"  # <-- 1 decimal
@@ -482,7 +546,7 @@ class MainWindow(QMainWindow):
         item.setText(1, g_host)
         item.setText(2, g_status)
         item.setText(3, group_cpu_str)
-        item.setText(4, group_mem_str)     # <-- 1 decimal
+        item.setText(4, group_mem_str)  # <-- 1 decimal
         item.setText(5, g_auto)
         item.setText(6, g_prio)
 
@@ -497,17 +561,23 @@ class MainWindow(QMainWindow):
         mem_mb = self._mem_mb(proc)
         auto = "Yes" if getattr(proc, "auto_restart", False) else "No"
         host_name = getattr(proc, "hostname", "") or ""
-        prio_str = self._proc_priority(proc)  # <-- will now show '-' if not running, and annotate RT
+        prio_str = self._proc_priority(
+            proc
+        )  # <-- will now show '-' if not running, and annotate RT
 
         item.setText(0, proc.name)
         item.setText(1, host_name)
         item.setText(2, status)
         item.setText(3, cpu_str)
-        item.setText(4, f"{mem_mb:.1f}")      # <-- 1 decimal
+        item.setText(4, f"{mem_mb:.1f}")  # <-- 1 decimal
         item.setText(5, auto)
         item.setText(6, prio_str)
 
-        item.setData(0, Qt.UserRole, {"type": "proc", "name": proc.name, "host": host_name, "group": group_name})
+        item.setData(
+            0,
+            Qt.UserRole,
+            {"type": "proc", "name": proc.name, "host": host_name, "group": group_name},
+        )
         item.setForeground(2, QBrush(self._status_color(status)))
         item.setForeground(5, QBrush(self._auto_color(auto)))
 
@@ -595,7 +665,6 @@ class MainWindow(QMainWindow):
 
     def edit_process(self):
         proc_name = self._selected_proc()
-        host_name = self._selected_host()
         if not proc_name:
             QMessageBox.warning(self, "Warning", "No process selected.")
             return
@@ -634,11 +703,18 @@ class MainWindow(QMainWindow):
         # Fetch full current buffer for this proc without copying whole dicts
         initial_text = ""
         if hasattr(self.controller, "get_proc_output_delta"):
-            _gen, initial_text, _reset, _cur_len = self.controller.get_proc_output_delta(
-                proc_name, last_gen=-1, last_len=0
+            _gen, initial_text, _reset, _cur_len = (
+                self.controller.get_proc_output_delta(
+                    proc_name, last_gen=-1, last_len=0
+                )
             )
 
-        dlg = ProcessOutput(proc_name, initial_text=initial_text, controller=self.controller, parent=self)
+        dlg = ProcessOutput(
+            proc_name,
+            initial_text=initial_text,
+            controller=self.controller,
+            parent=self,
+        )
         self.output_windows[proc_name] = dlg
         dlg.show()
 
@@ -655,7 +731,9 @@ class MainWindow(QMainWindow):
             self.controller.start_proc(proc_name, host)
             self.load_processes()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to start {proc_name}@{host}: {e}")
+            QMessageBox.critical(
+                self, "Error", f"Failed to start {proc_name}@{host}: {e}"
+            )
 
     def _stop_proc_direct(self, proc_name: str, host_name: str = None):
         if not proc_name:
@@ -669,7 +747,9 @@ class MainWindow(QMainWindow):
             self.controller.stop_proc(proc_name, host)
             self.load_processes()
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to stop {proc_name}@{host}: {e}")
+            QMessageBox.critical(
+                self, "Error", f"Failed to stop {proc_name}@{host}: {e}"
+            )
 
     def _edit_proc_direct(self, proc_name: str):
         if not proc_name:
@@ -688,7 +768,10 @@ class MainWindow(QMainWindow):
         if not host:
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
-        if QMessageBox.question(self, "Confirm", f"Delete process '{proc_name}'?") != QMessageBox.Yes:
+        if (
+            QMessageBox.question(self, "Confirm", f"Delete process '{proc_name}'?")
+            != QMessageBox.Yes
+        ):
             return
         try:
             self.controller.del_proc(proc_name, host)
@@ -710,7 +793,10 @@ class MainWindow(QMainWindow):
         if not host_name:
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
-        if QMessageBox.question(self, "Confirm", f"Delete process '{proc_name}'?") != QMessageBox.Yes:
+        if (
+            QMessageBox.question(self, "Confirm", f"Delete process '{proc_name}'?")
+            != QMessageBox.Yes
+        ):
             return
         try:
             self.controller.del_proc(proc_name, host_name)
@@ -721,14 +807,18 @@ class MainWindow(QMainWindow):
     def spawn_local_node(self):
         try:
             from dpm.utils.local_node import spawn_local_node
+
             pid, logfile = spawn_local_node()
-            QMessageBox.information(self, "Node", f"Spawned node PID {pid} -> {logfile}")
+            QMessageBox.information(
+                self, "Node", f"Spawned node PID {pid} -> {logfile}"
+            )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to spawn local node: {e}")
 
     def stop_local_node(self):
         try:
             from dpm.utils.local_node import stop_last_spawned_node
+
             terminated = stop_last_spawned_node()
             if terminated:
                 QMessageBox.information(self, "Node", "Stopped local node.")
@@ -792,8 +882,9 @@ class MainWindow(QMainWindow):
                     c = getattr(p, "cpu_usage", None)
                 if c is not None:
                     cpu_vals.append(float(c))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Group CPU parse failed: %s", e)
         g_cpu_frac = (sum(cpu_vals) / len(cpu_vals)) if cpu_vals else 0.0
 
         # MEM: sum of per-proc MB
@@ -801,8 +892,9 @@ class MainWindow(QMainWindow):
         for p in procs:
             try:
                 mem_vals.append(float(self._mem_mb(p)))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as e:
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Group memory parse failed: %s", e)
         g_mem_mb = sum(mem_vals) if mem_vals else 0.0
 
         # Auto: Yes/No/Mixed based on auto_restart
@@ -836,8 +928,9 @@ class MainWindow(QMainWindow):
             running = getattr(proc, "running", None)
             if isinstance(running, bool):
                 return "Running" if running else "Stopped"
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Status parse failed: %s", e)
         return "Ready"
 
     def _mem_mb(self, proc) -> float:
@@ -858,8 +951,9 @@ class MainWindow(QMainWindow):
             if v is not None:
                 v = float(v)
                 return v / (1024.0 * 1024.0) if v > 4096.0 else v
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("Memory parse failed: %s", e)
         return 0.0
 
     def _status_color(self, status_str: str) -> QColor:
@@ -906,11 +1000,15 @@ class MainWindow(QMainWindow):
             host_name = data.get("host") or self._selected_host()
 
             act_start = QAction("Start", self)
-            act_start.triggered.connect(lambda: self._start_proc_direct(proc_name, host_name))
+            act_start.triggered.connect(
+                lambda: self._start_proc_direct(proc_name, host_name)
+            )
             menu.addAction(act_start)
 
             act_stop = QAction("Stop", self)
-            act_stop.triggered.connect(lambda: self._stop_proc_direct(proc_name, host_name))
+            act_stop.triggered.connect(
+                lambda: self._stop_proc_direct(proc_name, host_name)
+            )
             menu.addAction(act_stop)
 
             act_edit = QAction("Edit", self)
@@ -922,7 +1020,9 @@ class MainWindow(QMainWindow):
             menu.addAction(act_view)
 
             act_delete = QAction("Delete...", self)
-            act_delete.triggered.connect(lambda: self._delete_proc_direct(proc_name, host_name))
+            act_delete.triggered.connect(
+                lambda: self._delete_proc_direct(proc_name, host_name)
+            )
             menu.addAction(act_delete)
         else:
             # Group context menu
@@ -944,14 +1044,20 @@ class MainWindow(QMainWindow):
     # --- Group helpers ---
     def _procs_in_group(self, group_name: str):
         try:
-            return [p for p in self.controller.procs.values() if (getattr(p, "group", "") or "(ungrouped)") == group_name]
+            return [
+                p
+                for p in self.controller.procs.values()
+                if (getattr(p, "group", "") or "(ungrouped)") == group_name
+            ]
         except Exception:
             return []
 
     def _start_group(self, group_name: str):
         procs = self._procs_in_group(group_name)
         if not procs:
-            QMessageBox.information(self, "Start All", f"No processes found in group '{group_name}'.")
+            QMessageBox.information(
+                self, "Start All", f"No processes found in group '{group_name}'."
+            )
             return
         selected_host = self._selected_host()
         failures = []
@@ -967,14 +1073,20 @@ class MainWindow(QMainWindow):
                 failures.append(f"{p.name}@{host}: {e}")
         self.load_processes()
         if missing_host:
-            QMessageBox.warning(self, "Start All", f"No host for: {', '.join(missing_host)}")
+            QMessageBox.warning(
+                self, "Start All", f"No host for: {', '.join(missing_host)}"
+            )
         if failures:
-            QMessageBox.critical(self, "Start All", "Some failed:\n" + "\n".join(failures))
+            QMessageBox.critical(
+                self, "Start All", "Some failed:\n" + "\n".join(failures)
+            )
 
     def _stop_group(self, group_name: str):
         procs = self._procs_in_group(group_name)
         if not procs:
-            QMessageBox.information(self, "Stop All", f"No processes found in group '{group_name}'.")
+            QMessageBox.information(
+                self, "Stop All", f"No processes found in group '{group_name}'."
+            )
             return
         selected_host = self._selected_host()
         failures = []
@@ -990,22 +1102,33 @@ class MainWindow(QMainWindow):
                 failures.append(f"{p.name}@{host}: {e}")
         self.load_processes()
         if missing_host:
-            QMessageBox.warning(self, "Stop All", f"No host for: {', '.join(missing_host)}")
+            QMessageBox.warning(
+                self, "Stop All", f"No host for: {', '.join(missing_host)}"
+            )
         if failures:
-            QMessageBox.critical(self, "Stop All", "Some failed:\n" + "\n".join(failures))
+            QMessageBox.critical(
+                self, "Stop All", "Some failed:\n" + "\n".join(failures)
+            )
 
     def _view_group_outputs(self, group_name: str):
         procs = self._procs_in_group(group_name)
         if not procs:
-            QMessageBox.information(self, "View Output (All)", f"No processes found in group '{group_name}'.")
+            QMessageBox.information(
+                self,
+                "View Output (All)",
+                f"No processes found in group '{group_name}'.",
+            )
             return
         for p in procs:
             try:
                 self._open_output_window(p.name)
-            except Exception:
-                pass
+            except Exception as e:
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Open output failed for %s: %s", p.name, e)
 
-    def _on_process_tree_double_clicked(self, item: QTreeWidgetItem, column: int) -> None:
+    def _on_process_tree_double_clicked(
+        self, item: QTreeWidgetItem, column: int
+    ) -> None:
         if item is None:
             return
 

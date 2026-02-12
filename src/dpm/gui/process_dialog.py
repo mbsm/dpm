@@ -1,5 +1,15 @@
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QFormLayout, QLineEdit, QCheckBox, QMessageBox
-from PyQt5.QtCore import Qt
+"""Dialog for creating or editing a process."""
+
+from PyQt5.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QFormLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QVBoxLayout,
+)
+
 
 class ProcessDialog(QDialog):
     def __init__(self, controller, proc=None):
@@ -54,7 +64,9 @@ class ProcessDialog(QDialog):
         self.command_input.setText(getattr(self.proc, "exec_command", "") or "")
         self.group_input.setText(getattr(self.proc, "group", "") or "")
         self.host_input.setText(getattr(self.proc, "hostname", "") or "")
-        self.auto_restart_checkbox.setChecked(bool(getattr(self.proc, "auto_restart", False)))
+        self.auto_restart_checkbox.setChecked(
+            bool(getattr(self.proc, "auto_restart", False))
+        )
         self.realtime_checkbox.setChecked(bool(getattr(self.proc, "realtime", False)))
 
     def save_process(self):
@@ -66,7 +78,11 @@ class ProcessDialog(QDialog):
         realtime = self.realtime_checkbox.isChecked()
 
         if not name or not proc_command or not host:
-            QMessageBox.warning(self, "Input Error", "Process name, proc command, and host are required.")
+            QMessageBox.warning(
+                self,
+                "Input Error",
+                "Process name, proc command, and host are required.",
+            )
             return
 
         try:
@@ -75,9 +91,13 @@ class ProcessDialog(QDialog):
                 old_name = getattr(self.proc, "name", None)
                 if old_name:
                     self.controller.del_proc(old_name, old_host)
-                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
+                self.controller.create_proc(
+                    name, proc_command, group, host, auto_restart, realtime
+                )
             else:
-                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
+                self.controller.create_proc(
+                    name, proc_command, group, host, auto_restart, realtime
+                )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")
             return

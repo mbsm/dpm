@@ -1,4 +1,7 @@
-from PyQt5 import QtWidgets, QtCore
+"""Legacy process form widget (unused in main GUI)."""
+
+from PyQt5 import QtWidgets
+
 
 class ProcessForm(QtWidgets.QWidget):
     def __init__(self, controller, process=None):
@@ -53,7 +56,9 @@ class ProcessForm(QtWidgets.QWidget):
         self.command_input.setText(getattr(self.process, "exec_command", "") or "")
         self.group_input.setText(getattr(self.process, "group", ""))
         self.host_input.setText(getattr(self.process, "hostname", ""))
-        self.auto_restart_checkbox.setChecked(getattr(self.process, "auto_restart", False))
+        self.auto_restart_checkbox.setChecked(
+            getattr(self.process, "auto_restart", False)
+        )
         self.realtime_checkbox.setChecked(getattr(self.process, "realtime", False))
 
     def submit(self):
@@ -65,7 +70,9 @@ class ProcessForm(QtWidgets.QWidget):
         realtime = self.realtime_checkbox.isChecked()
 
         if not name or not proc_command or not host:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Please fill in all required fields.")
+            QtWidgets.QMessageBox.warning(
+                self, "Input Error", "Please fill in all required fields."
+            )
             return
 
         try:
@@ -74,11 +81,17 @@ class ProcessForm(QtWidgets.QWidget):
                 old_host = getattr(self.process, "hostname", host)
                 if old_name:
                     self.controller.del_proc(old_name, old_host)
-                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
+                self.controller.create_proc(
+                    name, proc_command, group, host, auto_restart, realtime
+                )
             else:
-                self.controller.create_proc(name, proc_command, group, host, auto_restart, realtime)
+                self.controller.create_proc(
+                    name, proc_command, group, host, auto_restart, realtime
+                )
         except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Failed to submit process: {e}")
+            QtWidgets.QMessageBox.critical(
+                self, "Error", f"Failed to submit process: {e}"
+            )
             return
 
         self.close()

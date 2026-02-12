@@ -48,10 +48,14 @@ def load_process_specs(path: str) -> List[Dict[str, Any]]:
         return [data]
     if isinstance(data, list):
         return [x for x in data if isinstance(x, dict)]
-    raise ValueError("Unsupported YAML format for process specs (expected dict or list of dicts)")
+    raise ValueError(
+        "Unsupported YAML format for process specs (expected dict or list of dicts)"
+    )
 
 
-def load_and_create(path: str, controller) -> Tuple[List[str], List[Tuple[Dict[str, Any], str]]]:
+def load_and_create(
+    path: str, controller
+) -> Tuple[List[str], List[Tuple[Dict[str, Any], str]]]:
     created: List[str] = []
     errors: List[Tuple[Dict[str, Any], str]] = []
 
@@ -66,9 +70,13 @@ def load_and_create(path: str, controller) -> Tuple[List[str], List[Tuple[Dict[s
             realtime = bool(spec.get("realtime", False))
 
             if not name or not host or not exec_command:
-                raise ValueError("spec missing required fields: name, host, exec_command")
+                raise ValueError(
+                    "spec missing required fields: name, host, exec_command"
+                )
 
-            controller.create_proc(name, exec_command, group, host, auto_restart, realtime)
+            controller.create_proc(
+                name, exec_command, group, host, auto_restart, realtime
+            )
             created.append(f"{name}@{host}")
         except Exception as e:
             errors.append((spec, str(e)))
@@ -76,7 +84,9 @@ def load_and_create(path: str, controller) -> Tuple[List[str], List[Tuple[Dict[s
     return created, errors
 
 
-def save_all_process_specs(path: str, controller, append: bool = False) -> Tuple[int, int]:
+def save_all_process_specs(
+    path: str, controller, append: bool = False
+) -> Tuple[int, int]:
     """
     Save all processes known to controller into a YAML list.
     Returns (written, skipped).
@@ -137,5 +147,7 @@ def save_all_process_specs(path: str, controller, append: bool = False) -> Tuple
     return len(specs), skipped
 
 
-def save_current_processes(path: str, controller, append: bool = False) -> Tuple[int, int]:
+def save_current_processes(
+    path: str, controller, append: bool = False
+) -> Tuple[int, int]:
     return save_all_process_specs(path, controller, append=append)

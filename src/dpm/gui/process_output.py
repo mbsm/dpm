@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+"""Output window that streams a process log buffer."""
+
+import logging
+
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QDialog, QTextEdit, QVBoxLayout
 from PyQt5.QtGui import QFont, QTextCursor
+from PyQt5.QtWidgets import QDialog, QTextEdit, QVBoxLayout
 
 
 class ProcessOutput(QDialog):
-    def __init__(self, proc_name: str, initial_text: str = "", controller=None, parent=None):
+    def __init__(
+        self, proc_name: str, initial_text: str = "", controller=None, parent=None
+    ):
         super().__init__(parent)
         self.proc_name = proc_name
         self.controller = controller
@@ -64,6 +70,6 @@ class ProcessOutput(QDialog):
     def closeEvent(self, event):
         try:
             self._timer.stop()
-        except Exception:
-            pass
+        except (RuntimeError, AttributeError) as e:
+            logging.debug("ProcessOutput timer stop failed: %s", e)
         super().closeEvent(event)

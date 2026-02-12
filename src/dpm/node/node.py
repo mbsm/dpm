@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-import os
-import time
-import psutil
-from subprocess import PIPE
+"""Node agent for running and monitoring processes on a host."""
+
+import fcntl
 import logging
 import logging.handlers
+import os
+import shlex
+import signal
 import socket
-import yaml
-import fcntl
 import sys
 import threading
-import signal
-import shlex
+import time
+from subprocess import PIPE
+
+import psutil
+import yaml
+
 import lcm
 
 # Define process state constants
@@ -39,23 +43,25 @@ except ModuleNotFoundError as e:
     ) from e
 
 
-def get_ip():
+def get_ip() -> str:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
             return s.getsockname()[0]
-    except Exception:
+    except OSError:
         return "127.0.0.1"
 
 
 class Timer:
-    def __init__(self, timeout):
+    """Simple periodic timer helper."""
+
+    def __init__(self, timeout: float):
         now = time.time()
         self.t0 = now
         self.period = timeout
         self.next = now + timeout
 
-    def timeout(self):
+    def timeout(self) -> bool:
         now = time.time()
         if now > self.next:
             self.next += self.period
@@ -63,18 +69,18 @@ class Timer:
         return False
 
 
-def set_nonblocking(fd):
+def set_nonblocking(fd: int) -> None:
     fl = fcntl.fcntl(fd, fcntl.F_GETFL)
     fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
 
 
-def is_running(proc):
+def is_running(proc: psutil.Popen | None) -> bool:
     if proc is None:
         return False
     return proc.poll() is None
 
 
-def stream_reader(stream, output_list):
+def stream_reader(stream, output_list) -> None:
     try:
         while True:
             line = stream.readline()
@@ -87,13 +93,15 @@ def stream_reader(stream, output_list):
             if line:
                 output_list.append(line + "\n")
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug(f"Stream Reader: Captured line: {repr(line)}")
-    except Exception as e:
-        logging.error(f"Stream Reader: Error reading stream: {e}")
+                    logging.debug("Stream Reader: Captured line: %r", line)
+    except (OSError, ValueError) as e:
+        logging.error("Stream Reader: Error reading stream: %s", e)
 
 
 class NodeAgent:
-    def __init__(self, config_file='/etc/dpm/dpm.yaml'):
+    """LCM-based node agent managing local processes and telemetry."""
+
+    def __init__(self, config_file: str = "/etc/dpm/dpm.yaml"):
         self.config = self.load_config(config_file)
         self.host_info_channel = self.config["host_info_channel"]
         self.proc_outputs_channel = self.config["proc_outputs_channel"]
@@ -130,7 +138,11 @@ class NodeAgent:
         self._init_lcm()
 
         self.init_logging()
-        logging.info(f"Host initialized with channels: command={self.command_channel}, info={self.host_info_channel}")
+        logging.info(
+            "Host initialized with channels: command=%s info=%s",
+            self.command_channel,
+            self.host_info_channel,
+        )
 
     def _init_lcm(self):
         """(Re)initialize LCM and subscriptions."""
@@ -139,10 +151,18 @@ class NodeAgent:
         # IMPORTANT: re-subscribe after recreating LCM
         self.lc.subscribe(self.command_channel, self.command_handler)
 
-        logging.info(f"LCM initialized url={self.lc_url} command_channel={self.command_channel}")
+        logging.info(
+            "LCM initialized url=%s command_channel=%s",
+            self.lc_url,
+            self.command_channel,
+        )
 
-    def _handle_lcm_error(self, e: Exception):
-        logging.error(f"LCM error: {e}. Reinitializing LCM in {self._lcm_backoff_s:.2f}s...")
+    def _handle_lcm_error(self, e: Exception) -> None:
+        logging.error(
+            "LCM error: %s. Reinitializing LCM in %.2fs...",
+            e,
+            self._lcm_backoff_s,
+        )
         time.sleep(self._lcm_backoff_s)
         self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)  # cap backoff
         try:
@@ -150,25 +170,36 @@ class NodeAgent:
             self._lcm_backoff_s = 0.25  # reset on success
             logging.info("LCM reinitialized successfully.")
         except Exception as e2:
-            logging.error(f"LCM reinit failed: {e2}")
+            logging.error("LCM reinit failed: %s", e2)
 
-    def load_config(self, config_path):
+    def load_config(self, config_path: str) -> dict:
         if not os.path.isfile(config_path):
             raise FileNotFoundError(f"Configuration file {config_path} not found.")
         if not os.access(config_path, os.R_OK):
             raise PermissionError(f"Configuration file {config_path} is not readable.")
         try:
-            with open(config_path, "r") as file:
+            with open(config_path, "r", encoding="utf-8") as file:
                 config = yaml.safe_load(file)
         except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing YAML configuration file {config_path}: {e}")
+            raise ValueError(
+                f"Error parsing YAML configuration file {config_path}: {e}"
+            ) from e
         except Exception as e:
-            raise RuntimeError(f"Unexpected error loading configuration file {config_path}: {e}")
+            raise RuntimeError(
+                f"Unexpected error loading configuration file {config_path}: {e}"
+            ) from e
 
         required_fields = [
-            "command_channel", "host_info_channel", "proc_outputs_channel",
-            "host_procs_channel", "stop_timeout", "monitor_interval", "output_interval",
-            "host_status_interval", "procs_status_interval", "lcm_url"
+            "command_channel",
+            "host_info_channel",
+            "proc_outputs_channel",
+            "host_procs_channel",
+            "stop_timeout",
+            "monitor_interval",
+            "output_interval",
+            "host_status_interval",
+            "procs_status_interval",
+            "lcm_url",
         ]
         for field in required_fields:
             if field not in config:
@@ -194,7 +225,9 @@ class NodeAgent:
 
         fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-        is_systemd = bool(os.environ.get("INVOCATION_ID") or os.environ.get("JOURNAL_STREAM"))
+        is_systemd = bool(
+            os.environ.get("INVOCATION_ID") or os.environ.get("JOURNAL_STREAM")
+        )
 
         # Always attach a stream handler (journald or console)
         stream_handler = logging.StreamHandler(stream=sys.stdout)
@@ -203,7 +236,10 @@ class NodeAgent:
         logger.addHandler(stream_handler)
 
         if is_systemd:
-            logger.info(f"Logging initialized for journald (level={cfg_level}); file logging disabled.")
+            logger.info(
+                "Logging initialized for journald (level=%s); file logging disabled.",
+                cfg_level,
+            )
             return
 
         # Non-systemd: optional file logging
@@ -216,11 +252,12 @@ class NodeAgent:
             fh.setFormatter(fmt)
             fh.setLevel(level)
             logger.addHandler(fh)
-            logger.info(f"Logging initialized (level={cfg_level}) path={log_path}")
-        except Exception as e:
-            logger.warning(f"File logging disabled ({e}); stdout only.")
+            logger.info("Logging initialized (level=%s) path=%s", cfg_level, log_path)
+        except OSError as e:
+            logger.warning("File logging disabled (%s); stdout only.", e)
 
-    def command_handler(self, channel, data):
+    def command_handler(self, channel, data) -> None:
+        """Handle incoming command messages from the controller."""
         msg = command_t.decode(data)
 
         # ...existing code (host filter etc)...
@@ -230,7 +267,9 @@ class NodeAgent:
         if action == "create_process":
             # Call positionally to match existing NodeAgent.create_process signature
             # Expected order (based on current codebase usage): (name, exec_command, auto_restart, realtime, group)
-            self.create_process(msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group)
+            self.create_process(
+                msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group
+            )
 
         elif action == "start_process":
             self.start_process(msg.name)
@@ -250,14 +289,17 @@ class NodeAgent:
         else:
             logging.warning("Unknown action: %s", action)
 
-    def create_process(self, process_name, exec_command, auto_restart, realtime, group):
+    def create_process(
+        self, process_name, exec_command, auto_restart, realtime, group
+    ) -> None:
+        """Register a process definition without starting it."""
         """
         Canonical internal schema (dict):
           proc, exec_command, auto_restart, realtime, group, state, status, errors, exit_code, stdout, stderr
         """
         self.processes[process_name] = {
             "proc": None,
-            "ps_proc": None,                 # <-- keep a persistent psutil.Process for cpu sampling
+            "ps_proc": None,  # <-- keep a persistent psutil.Process for cpu sampling
             "exec_command": exec_command,
             "auto_restart": bool(auto_restart),
             "realtime": bool(realtime),
@@ -273,25 +315,32 @@ class NodeAgent:
         }
         logging.info(
             "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
-            process_name, exec_command, auto_restart, realtime
+            process_name,
+            exec_command,
+            auto_restart,
+            realtime,
         )
 
-    def delete_process(self, process_name):
+    def delete_process(self, process_name) -> None:
+        """Delete a process definition, stopping it first if needed."""
         if process_name in self.processes:
             if self.processes[process_name]["proc"] is not None:
                 self.stop_process(process_name)
             # ensure no stale psutil handle
             self.processes[process_name]["ps_proc"] = None
             del self.processes[process_name]
-            logging.info(f"Delete Process: Deleted process: {process_name}")
+            logging.info("Delete Process: Deleted process: %s", process_name)
         else:
-            logging.warning(f"Delete Process: Process {process_name} not found, ignoring command.")
+            logging.warning(
+                "Delete Process: Process %s not found, ignoring command.", process_name
+            )
 
-    def start_process(self, process_name):
+    def start_process(self, process_name) -> None:
+        """Start a configured process if it is not already running."""
         if process_name not in self.processes:
             logging.warning(
                 "Start Process: Process %s not found in the process table. Ignoring command.",
-                process_name
+                process_name,
             )
             return
 
@@ -303,11 +352,16 @@ class NodeAgent:
         if is_running(proc):
             logging.info(
                 "Start Process: Process %s is already running with PID %s. Skipping start.",
-                process_name, proc.pid
+                process_name,
+                proc.pid,
             )
             return
 
-        logging.info("Start Process: Starting process: %s with command: %s", process_name, exec_command)
+        logging.info(
+            "Start Process: Starting process: %s with command: %s",
+            process_name,
+            exec_command,
+        )
         try:
             argv = shlex.split(exec_command)
             proc = psutil.Popen(
@@ -328,21 +382,27 @@ class NodeAgent:
             # Start threads to read stdout and stderr
             stdout_lines = []
             stderr_lines = []
-            stdout_thread = threading.Thread(target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True)
-            stderr_thread = threading.Thread(target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True)
+            stdout_thread = threading.Thread(
+                target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True
+            )
+            stderr_thread = threading.Thread(
+                target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True
+            )
             stdout_thread.start()
             stderr_thread.start()
 
             self.processes[process_name]["stdout_lines"] = stdout_lines
             self.processes[process_name]["stderr_lines"] = stderr_lines
 
-            logging.info("Start Process: Started process: %s with PID %s", process_name, proc.pid)
+            logging.info(
+                "Start Process: Started process: %s with PID %s", process_name, proc.pid
+            )
 
             # Prime CPU sampling via the persistent psutil.Process used in publish_host_procs()
             try:
                 proc_info["ps_proc"] = psutil.Process(proc.pid)
                 proc_info["ps_proc"].cpu_percent(interval=None)
-            except Exception:
+            except (psutil.Error, OSError, ValueError):
                 proc_info["ps_proc"] = None
 
             if realtime:
@@ -350,19 +410,29 @@ class NodeAgent:
                     os.sched_setscheduler(proc.pid, os.SCHED_FIFO, os.sched_param(40))
                     logging.info(
                         "Start Process: Set real-time priority for process: %s with PID %s",
-                        process_name, proc.pid
+                        process_name,
+                        proc.pid,
                     )
                 except PermissionError:
-                    logging.error(f"Start Process: Failed to set real-time priority for process {process_name}: Permission denied.")
-                    self.processes[process_name]["errors"] = "Permission denied setting real-time priority."
-                except Exception as e:
-                    logging.error(f"Start Process: Failed to set real-time priority for process {process_name}: {e}")
+                    logging.error(
+                        "Start Process: Failed to set real-time priority for process %s: Permission denied.",
+                        process_name,
+                    )
+                    self.processes[process_name][
+                        "errors"
+                    ] = "Permission denied setting real-time priority."
+                except (OSError, ValueError) as e:
+                    logging.error(
+                        "Start Process: Failed to set real-time priority for process %s: %s",
+                        process_name,
+                        e,
+                    )
                     self.processes[process_name]["errors"] = str(e)
 
-        except Exception as e:
+        except (OSError, ValueError, psutil.Error) as e:
             # Mark process as failed and store error
             error_msg = f"Failed to start process {process_name}: {e}"
-            logging.error(f"Start Process: {error_msg}")
+            logging.error("Start Process: %s", error_msg)
             proc_info["state"] = STATE_FAILED
             proc_info["status"] = "failed"
             proc_info["errors"] = str(e)
@@ -378,24 +448,35 @@ class NodeAgent:
                 msg.stdout = ""
                 msg.stderr = error_msg
                 self.lc.publish(self.proc_outputs_channel, msg.encode())
-                logging.debug(f"Start Process: Published startup error output for {process_name}")
+                logging.debug(
+                    "Start Process: Published startup error output for %s", process_name
+                )
             except Exception as pub_e:
-                logging.error(f"Start Process: Failed to publish startup error for {process_name}: {pub_e}")
+                logging.error(
+                    "Start Process: Failed to publish startup error for %s: %s",
+                    process_name,
+                    pub_e,
+                )
 
-    def stop_process(self, process_name):
+    def stop_process(self, process_name) -> None:
+        """Stop a running process and update its state."""
         if process_name not in self.processes:
-            logging.warning(f"Stop Process: Process {process_name} not found, ignoring command.")
+            logging.warning(
+                "Stop Process: Process %s not found, ignoring command.", process_name
+            )
             return
 
         proc_info = self.processes[process_name]
         proc = proc_info["proc"]
 
         if proc is None:
-            logging.info(f"Stop Process: Process {process_name} not running, ignoring command.")
+            logging.info(
+                "Stop Process: Process %s not running, ignoring command.", process_name
+            )
             return
 
         if proc_info["state"] == STATE_READY:
-            logging.info(f"Stop Process: Process {process_name} is already stopped.")
+            logging.info("Stop Process: Process %s is already stopped.", process_name)
             return
 
         try:
@@ -405,7 +486,11 @@ class NodeAgent:
                 proc.terminate()
 
             proc.wait(timeout=self.stop_timeout)
-            logging.info(f"Stop Process: Gracefully stopped process: {process_name} with PID {proc.pid}")
+            logging.info(
+                "Stop Process: Gracefully stopped process: %s with PID %s",
+                process_name,
+                proc.pid,
+            )
             proc_info["exit_code"] = proc.returncode
             proc_info["state"] = STATE_READY
             proc_info["status"] = "stopped"
@@ -418,22 +503,26 @@ class NodeAgent:
             self._kill_process_group(proc.pid, signal.SIGKILL)
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except (psutil.Error, OSError, ValueError) as e:
+                logging.debug("Stop Process: kill failed for %s: %s", process_name, e)
             try:
                 proc.wait(timeout=2)
-            except Exception:
-                pass
+            except (psutil.Error, OSError, ValueError) as e:
+                logging.debug("Stop Process: wait failed for %s: %s", process_name, e)
 
-            logging.warning(f"Stop Process: Forcefully killed process: {process_name} with PID {proc.pid}")
+            logging.warning(
+                "Stop Process: Forcefully killed process: %s with PID %s",
+                process_name,
+                proc.pid,
+            )
             proc_info["exit_code"] = proc.returncode
             proc_info["state"] = STATE_KILLED
             proc_info["status"] = "killed"
             proc_info["proc"] = None
             proc_info["ps_proc"] = None  # CLEAR
 
-    def _handle_signal(self, signum, frame):
-        logging.info(f"Received signal {signum}; shutting down.")
+    def _handle_signal(self, signum, frame) -> None:
+        logging.info("Received signal %s; shutting down.", signum)
         self._stop_event.set()
 
     def _kill_process_group(self, pid: int, sig: int) -> bool:
@@ -446,7 +535,7 @@ class NodeAgent:
         except ProcessLookupError:
             return False
         except Exception as e:
-            logging.warning(f"Failed to resolve pgid for pid={pid}: {e}")
+            logging.warning("Failed to resolve pgid for pid=%s: %s", pid, e)
             return False
 
         try:
@@ -455,12 +544,18 @@ class NodeAgent:
         except ProcessLookupError:
             return False
         except Exception as e:
-            logging.warning(f"Failed to signal process group pgid={pgid} sig={sig}: {e}")
+            logging.warning(
+                "Failed to signal process group pgid=%s sig=%s: %s", pgid, sig, e
+            )
             return False
 
-    def monitor_process(self, process_name):
+    def monitor_process(self, process_name) -> None:
+        """Monitor a running process and publish any buffered output."""
         if process_name not in self.processes:
-            logging.warning(f"Monitor Process: Called with process {process_name} not in process table.")
+            logging.warning(
+                "Monitor Process: Called with process %s not in process table.",
+                process_name,
+            )
             return
 
         proc_info = self.processes[process_name]
@@ -472,7 +567,11 @@ class NodeAgent:
 
         if not is_running(proc):
             exit_code = proc.poll()
-            logging.warning(f"Monitor Process: Process {process_name} stopped with exit code: {exit_code}")
+            logging.warning(
+                "Monitor Process: Process %s stopped with exit code: %s",
+                process_name,
+                exit_code,
+            )
 
             proc_info["state"] = STATE_FAILED
             proc_info["status"] = "failed"
@@ -499,12 +598,16 @@ class NodeAgent:
                     msg.stderr = stderr_content
                     self.lc.publish(self.proc_outputs_channel, msg.encode())
                 except Exception as pub_e:
-                    logging.error(f"Monitor Process: Failed to publish output for {process_name}: {pub_e}")
+                    logging.error(
+                        "Monitor Process: Failed to publish output for %s: %s",
+                        process_name,
+                        pub_e,
+                    )
             else:
                 proc_info["errors"] = "Process stopped unexpectedly."
 
             if proc_info["auto_restart"]:
-                logging.info(f"Monitor Process: Restarting process {process_name}.")
+                logging.info("Monitor Process: Restarting process %s.", process_name)
                 self.start_process(process_name)
             return
 
@@ -518,7 +621,8 @@ class NodeAgent:
         proc_info["stdout_lines"].clear()
         proc_info["stderr_lines"].clear()
 
-    def publish_host_info(self):
+    def publish_host_info(self) -> None:
+        """Publish host-wide telemetry (CPU, memory, network)."""
         current_time = time.time()
         time_diff = current_time - self.last_publish_time
         self.last_publish_time = current_time
@@ -569,7 +673,62 @@ class NodeAgent:
         nice = int(psutil.Process(pid).nice())
         return 20 + nice
 
-    def publish_host_procs(self):
+    def _ensure_psutil_proc(self, proc_info: dict, pid: int) -> psutil.Process | None:
+        p = proc_info.get("ps_proc")
+        if p is not None:
+            return p
+
+        try:
+            p = psutil.Process(pid)
+            p.cpu_percent(interval=None)
+            proc_info["ps_proc"] = p
+            return p
+        except (psutil.Error, OSError, ValueError):
+            return None
+
+    def _fill_proc_metrics(
+        self, msg_proc: proc_info_t, proc_info: dict, pid: int
+    ) -> None:
+        p = self._ensure_psutil_proc(proc_info, pid)
+        if p is None:
+            msg_proc.cpu = 0.0
+            msg_proc.mem_rss = 0
+            msg_proc.mem_vms = 0
+            msg_proc.priority = 0
+            msg_proc.ppid = -1
+            msg_proc.runtime = 0
+            return
+
+        try:
+            msg_proc.cpu = float(p.cpu_percent(interval=None)) / 100.0
+        except (psutil.Error, OSError, ValueError):
+            msg_proc.cpu = 0.0
+
+        try:
+            mi = p.memory_info()
+            msg_proc.mem_rss = int(mi.rss // 1024)
+            msg_proc.mem_vms = int(mi.vms // 1024)
+        except (psutil.Error, OSError, ValueError):
+            msg_proc.mem_rss = 0
+            msg_proc.mem_vms = 0
+
+        try:
+            msg_proc.priority = int(self._htop_priority(pid))
+        except (psutil.Error, OSError, ValueError):
+            msg_proc.priority = 0
+
+        try:
+            msg_proc.ppid = int(p.ppid())
+        except (psutil.Error, OSError, ValueError):
+            msg_proc.ppid = -1
+
+        try:
+            msg_proc.runtime = int(time.time() - p.create_time())
+        except (psutil.Error, OSError, ValueError):
+            msg_proc.runtime = 0
+
+    def publish_host_procs(self) -> None:
+        """Publish process-level telemetry for all managed processes."""
         msg = host_procs_t()
         msg.timestamp = int(time.time() * 1e6)
         msg.hostname = self.hostname
@@ -595,52 +754,7 @@ class NodeAgent:
                 pid = int(proc.pid)
                 msg_proc.pid = pid
 
-                p = proc_info.get("ps_proc")
-                if p is None:
-                    try:
-                        p = psutil.Process(pid)
-                        p.cpu_percent(interval=None)  # prime if we missed it
-                        proc_info["ps_proc"] = p
-                    except Exception:
-                        p = None
-
-                if p is None:
-                    msg_proc.cpu = 0.0
-                    msg_proc.mem_rss = 0
-                    msg_proc.mem_vms = 0
-                    msg_proc.priority = 0
-                    msg_proc.ppid = -1
-                    msg_proc.runtime = 0
-                else:
-                    # CPU: fraction (0..N), GUI will display cpu*100
-                    try:
-                        msg_proc.cpu = float(p.cpu_percent(interval=None)) / 100.0
-                    except Exception:
-                        msg_proc.cpu = 0.0
-
-                    # MEM: publish kB to fit int32; GUI _mem_mb() divides by 1024 => MB
-                    try:
-                        mi = p.memory_info()
-                        msg_proc.mem_rss = int(mi.rss // 1024)
-                        msg_proc.mem_vms = int(mi.vms // 1024)
-                    except Exception:
-                        msg_proc.mem_rss = 0
-                        msg_proc.mem_vms = 0
-
-                    try:
-                        msg_proc.priority = int(self._htop_priority(pid))
-                    except Exception:
-                        msg_proc.priority = 0
-
-                    try:
-                        msg_proc.ppid = int(p.ppid())
-                    except Exception:
-                        msg_proc.ppid = -1
-
-                    try:
-                        msg_proc.runtime = int(time.time() - p.create_time())
-                    except Exception:
-                        msg_proc.runtime = 0
+                self._fill_proc_metrics(msg_proc, proc_info, pid)
             else:
                 msg_proc.cpu = 0.0
                 msg_proc.mem_rss = 0
@@ -655,7 +769,8 @@ class NodeAgent:
 
         self.lc.publish(self.host_procs_channel, msg.encode())
 
-    def publish_procs_outputs(self):
+    def publish_procs_outputs(self) -> None:
+        """Publish buffered stdout/stderr chunks for all processes."""
         for process_name, proc_info in self.processes.items():
             stdout = proc_info["stdout"]
             stderr = proc_info["stderr"]
@@ -674,7 +789,27 @@ class NodeAgent:
             proc_info["stdout"] = ""
             proc_info["stderr"] = ""
 
-    def run(self):
+    def _group_matches(self, process_group: str, target_group: str | None) -> bool:
+        pg = (process_group or "").strip()
+        tg = (target_group or "").strip()
+        if not tg or tg.lower() == "(ungrouped)":
+            return pg == "" or pg.lower() == "(ungrouped)"
+        return pg == tg
+
+    def start_group(self, group: str | None) -> None:
+        """Start all processes that belong to a named group."""
+        for name, info in self.processes.items():
+            if self._group_matches(info.get("group", ""), group):
+                self.start_process(name)
+
+    def stop_group(self, group: str | None) -> None:
+        """Stop all processes that belong to a named group."""
+        for name, info in self.processes.items():
+            if self._group_matches(info.get("group", ""), group):
+                self.stop_process(name)
+
+    def run(self) -> None:
+        """Main event loop for monitoring and publishing."""
         logging.info("Host running.")
         while not self._stop_event.is_set():
             try:
@@ -686,13 +821,13 @@ class NodeAgent:
             if self.monitor_timer.timeout():
                 for process_name in list(self.processes.keys()):
                     self.monitor_process(process_name)
-                    
+
             if self.output_timer.timeout():
                 self.publish_procs_outputs()
-                
+
             if self.host_status_timer.timeout():
                 self.publish_host_info()
-                
+
             if self.procs_status_timer.timeout():
                 self.publish_host_procs()
 
@@ -702,12 +837,14 @@ class NodeAgent:
             try:
                 self.stop_process(name)
             except Exception as e:
-                logging.warning(f"Shutdown: failed stopping {name}: {e}")
+                logging.warning("Shutdown: failed stopping %s: %s", name, e)
 
-def main():
+
+def main() -> None:
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
     agent = NodeAgent(config_file=config_path)
     agent.run()
+
 
 if __name__ == "__main__":
     main()
