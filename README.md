@@ -75,18 +75,47 @@ Supported command actions:
   - `host_procs_t`
   - `proc_output_t`
 
-## Install as service
+## Install options
 
-Use `install.sh` for full host install (venv + systemd + desktop integration):
+`install.sh` now supports component-based installation.
+
+Install both service and GUI (default):
 
 ```bash
 sudo ./install.sh install
+# or
+sudo ./install.sh install both
 ```
 
-Uninstall:
+Install only node service:
+
+```bash
+sudo ./install.sh install service
+```
+
+Service target installs only service dependencies (`psutil`, `PyYAML`, `lcm`) and skips GUI packages.
+
+Install only GUI desktop integration:
+
+```bash
+sudo ./install.sh install gui
+```
+
+GUI target installs only GUI dependencies (`PyQt5` + controller deps).
+
+Uninstall both (default):
 
 ```bash
 sudo ./install.sh uninstall
+# or
+sudo ./install.sh uninstall both
+```
+
+Uninstall only service or only GUI:
+
+```bash
+sudo ./install.sh uninstall service
+sudo ./install.sh uninstall gui
 ```
 
 ## Code inspection workflow
@@ -101,16 +130,11 @@ PYTHONPATH=src bandit -r src/dpm -f txt
 ```
 
 Review playbook and quality gates: `docs/code-inspection.md`
-Latest inspection snapshot: `CODE_REVIEW_REPORT.md`
-
-## Contributing
-
-Please read `CONTRIBUTING.md` before submitting changes.
-
-## Security
-
-Please read `SECURITY.md` for vulnerability reporting.
 
 ## License
 
 This project is licensed under the MIT License. See `LICENSE`.
+
+## Author
+
+Matias Bustos SM

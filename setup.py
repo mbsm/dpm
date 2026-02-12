@@ -6,8 +6,8 @@ setup(
     packages=find_packages(where='src'),
     package_dir={'': 'src'},
     description='Distributed Process Manager',
-    author='Your Name',
-    author_email='your.email@example.com',
+    author='Matias Bustos SM',
+    author_email='matias.bustos@example.com',
     entry_points={
         'gui_scripts': [
             'dpm-gui = dpm.gui.main:main',

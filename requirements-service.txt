@@ -1,0 +1,4 @@
+# Service-only runtime dependencies (node)
+psutil>=5.9
+PyYAML>=6.0
+lcm>=1.4

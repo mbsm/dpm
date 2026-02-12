@@ -1,0 +1,4 @@
+# GUI-only runtime dependencies (controller + Qt frontend)
+PyYAML>=6.0
+lcm>=1.4
+PyQt5>=5.15

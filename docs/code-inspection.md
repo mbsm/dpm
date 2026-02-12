@@ -78,7 +78,8 @@ Each inspection report should include:
 4. Validation output snapshots
 5. Suggested remediation priority
 
-Reference report template example: `CODE_REVIEW_REPORT.md`
+Reference report template: include executive summary, findings by priority,
+validation outputs, and remediation order.
 
 ## Quality gates (recommended)
 
@@ -92,3 +93,7 @@ Reference report template example: `CODE_REVIEW_REPORT.md`
 - `src/dpm_msgs/` files are generated from `lcm/*.lcm`.
 - Do not hand-edit generated message bindings.
 - If LCM schema changes, regenerate with `./gen-types.sh`.
+- Installer dependency profiles:
+  - `install service` uses `requirements-service.txt` (minimal footprint).
+  - `install gui` uses `requirements-gui.txt`.
+  - `install both` uses `requirements.txt`.

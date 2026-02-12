@@ -31,104 +31,80 @@ get_sudo_user_home() {
     fi
 }
 
-uninstall() {
-    echo "Starting DPM uninstallation..."
-
-    # 1. Stop and disable systemd service
-    echo "Stopping and disabling dpm-node service..."
-    systemctl stop dpm-node.service >/dev/null 2>&1 || echo "Service not running."
-    systemctl disable dpm-node.service >/dev/null 2>&1 || echo "Service not enabled."
-    rm -f /etc/systemd/system/dpm-node.service
-    systemctl daemon-reload
-
-    # 2. Remove desktop entry and icon
-    echo "Removing desktop entry and icon..."
-    rm -f "$DESKTOP_ENTRY_INSTALL_PATH/$DESKTOP_ENTRY_NAME"
-    if command -v xdg-icon-resource >/dev/null 2>&1; then
-        echo "Uninstalling icon using xdg-icon-resource..."
-        xdg-icon-resource uninstall --size 256 "$DPM_ICON_NAME" || true
-    else
-        echo "xdg-icon-resource not found, removing icon manually."
-        rm -f "$DPM_ICON_INSTALL_PATH/$DPM_ICON_NAME.png" || true
-    fi
-
-    if command -v update-desktop-database >/dev/null 2>&1; then
-        update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH" || true
-    fi
-
-    # 3. Remove installed files and directories
-    echo "Removing installed files..."
-    rm -rf "$DPM_INSTALL_DIR"
-    rm -rf "$DPM_LOG_DIR"
-
-    # NOTE: Preserve config by default (operators may have edits).
-    # If you want to remove config too, uncomment the next line:
-    # rm -rf "$DPM_CONFIG_DIR"
-
-    SUDO_USER_HOME=$(get_sudo_user_home)
-    if [ -d "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME" ]; then
-        echo "Removing save directory: $SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
-        rm -rf "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
-    fi
-
-    # 4. Remove user permissions file
-    echo "Removing real-time permissions configuration..."
-    rm -f /etc/security/limits.d/99-dpm-realtime.conf
-
-    echo "DPM uninstallation completed successfully!"
-    echo "Note: The user '$DPM_SERVICE_USER' was not removed."
-    exit 0
+usage() {
+    echo "Usage: $0 {install|uninstall} [service|gui|both]"
+    echo "  install service   Install/update node service only"
+    echo "  install gui       Install/update GUI desktop integration only"
+    echo "  install both      Install/update both service and GUI (default)"
+    echo "  uninstall service Remove node service only"
+    echo "  uninstall gui     Remove GUI desktop integration only"
+    echo "  uninstall both    Remove both service and GUI (default)"
 }
 
-install() {
-    echo "Starting DPM installation..."
+validate_target() {
+    case "$1" in
+        service|gui|both)
+            ;;
+        *)
+            echo "Invalid target: $1"
+            usage
+            exit 1
+            ;;
+    esac
+}
 
-    # 1. Clean up previous installations
-    echo "Cleaning up previous installations..."
-    rm -rf "$DPM_INSTALL_DIR"
+prepare_runtime() {
+    target="$1"
+    req_file="requirements.txt"
 
-    # Preserve config on reinstall (do not delete operator edits)
-    # rm -rf "$DPM_CONFIG_DIR"
+    case "$target" in
+        service)
+            req_file="requirements-service.txt"
+            ;;
+        gui)
+            req_file="requirements-gui.txt"
+            ;;
+        both)
+            req_file="requirements.txt"
+            ;;
+    esac
 
-    SUDO_USER_HOME=$(get_sudo_user_home)
-    if [ -d "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME" ]; then
-        rm -rf "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
-    fi
-
-    # 2. User and permissions setup (must happen before chown)
-    echo "Setting up user '$DPM_SERVICE_USER'..."
-    if ! id -u "$DPM_SERVICE_USER" >/dev/null 2>&1; then
-        echo "Creating user '$DPM_SERVICE_USER'..."
-        useradd -r -s /bin/false "$DPM_SERVICE_USER"
-    fi
-
-    # 3. Create directories
-    echo "Creating necessary directories..."
+    echo "Preparing DPM runtime in $DPM_INSTALL_DIR..."
     mkdir -p "$DPM_INSTALL_DIR"
     mkdir -p "$DPM_CONFIG_DIR"
-    mkdir -p "$DPM_LOG_DIR"
-    chown "$DPM_SERVICE_USER:$DPM_SERVICE_USER" "$DPM_LOG_DIR"
 
-    mkdir -p "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
-    if [ -n "$SUDO_USER" ]; then
-        chown -R "$SUDO_USER:$SUDO_USER" "$SUDO_USER_HOME/.dpm" || true
-    fi
-
-    # 4. Copy project files
-    echo "Copying source files to $DPM_INSTALL_DIR..."
     cp -r "$DPM_SRC_DIR/src" "$DPM_INSTALL_DIR/"
     cp "$DPM_SRC_DIR/setup.py" "$DPM_INSTALL_DIR/"
     cp "$DPM_SRC_DIR/requirements.txt" "$DPM_INSTALL_DIR/"
+    cp "$DPM_SRC_DIR/requirements-service.txt" "$DPM_INSTALL_DIR/"
+    cp "$DPM_SRC_DIR/requirements-gui.txt" "$DPM_INSTALL_DIR/"
 
-    # Install default config only if missing
     if [ ! -f "$DPM_CONFIG_DIR/dpm.yaml" ]; then
         cp "$DPM_SRC_DIR/dpm.yaml" "$DPM_CONFIG_DIR/dpm.yaml"
     else
         echo "Config exists at $DPM_CONFIG_DIR/dpm.yaml; leaving it unchanged."
     fi
 
-    # 5. Grant real-time permissions (PAM limits; systemd permissions are set in the unit too)
-    echo "Granting real-time permissions..."
+    python3 -m venv "$DPM_INSTALL_DIR/venv"
+    "$DPM_INSTALL_DIR/venv/bin/pip" install --upgrade pip
+    "$DPM_INSTALL_DIR/venv/bin/pip" install -r "$DPM_INSTALL_DIR/$req_file"
+
+    echo "Installing DPM package into virtual environment..."
+    cd "$DPM_INSTALL_DIR"
+    "$DPM_INSTALL_DIR/venv/bin/pip" install -e .
+}
+
+install_service_component() {
+    echo "Installing service component..."
+
+    if ! id -u "$DPM_SERVICE_USER" >/dev/null 2>&1; then
+        echo "Creating user '$DPM_SERVICE_USER'..."
+        useradd -r -s /bin/false "$DPM_SERVICE_USER"
+    fi
+
+    mkdir -p "$DPM_LOG_DIR"
+    chown "$DPM_SERVICE_USER:$DPM_SERVICE_USER" "$DPM_LOG_DIR"
+
     cat > /etc/security/limits.d/99-dpm-realtime.conf <<EOF
 # Note: PAM limits often do NOT apply to systemd services.
 # Kept for interactive/foreground runs.
@@ -136,17 +112,6 @@ $DPM_SERVICE_USER   soft    rtprio  99
 $DPM_SERVICE_USER   hard    rtprio  99
 EOF
 
-    # 6. Systemd service setup
-    echo "Setting up systemd service for dpm-node..."
-    python3 -m venv "$DPM_INSTALL_DIR/venv"
-    "$DPM_INSTALL_DIR/venv/bin/pip" install --upgrade pip
-    "$DPM_INSTALL_DIR/venv/bin/pip" install -r "$DPM_INSTALL_DIR/requirements.txt"
-
-    echo "Installing DPM package into virtual environment..."
-    cd "$DPM_INSTALL_DIR"
-    "$DPM_INSTALL_DIR/venv/bin/pip" install -e .
-
-    # Create and install the service file
     cat > /etc/systemd/system/dpm-node.service <<EOF
 [Unit]
 Description=DPM Node Service
@@ -189,28 +154,27 @@ ProtectSystem=full
 WantedBy=multi-user.target
 EOF
 
-    echo "Reloading systemd daemon and starting dpm-node service..."
     systemctl daemon-reload
     systemctl enable dpm-node.service
     systemctl restart dpm-node.service
-
-    echo "Checking dpm-node service status:"
     systemctl status dpm-node.service --no-pager
+}
 
-    # 7. Desktop entry for dpm-gui
-    echo "Creating desktop entry for dpm-gui..."
+install_gui_component() {
+    echo "Installing GUI component..."
+    SUDO_USER_HOME=$(get_sudo_user_home)
+    mkdir -p "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
+    if [ -n "$SUDO_USER" ]; then
+        chown -R "$SUDO_USER:$SUDO_USER" "$SUDO_USER_HOME/.dpm" || true
+    fi
 
-    # Install icon
     if command -v xdg-icon-resource >/dev/null 2>&1; then
-        echo "Installing icon using xdg-icon-resource..."
         xdg-icon-resource install --size 256 "$DPM_SRC_DIR/assets/icons/dpm-gui.png" "$DPM_ICON_NAME"
     else
-        echo "xdg-icon-resource not found, installing icon manually."
         mkdir -p "$DPM_ICON_INSTALL_PATH"
         cp "$DPM_SRC_DIR/assets/icons/dpm-gui.png" "$DPM_ICON_INSTALL_PATH/$DPM_ICON_NAME.png"
     fi
 
-    # Create desktop file
     cat > "$DESKTOP_ENTRY_INSTALL_PATH/$DESKTOP_ENTRY_NAME" <<EOF
 [Desktop Entry]
 Name=DPM GUI
@@ -222,29 +186,98 @@ Type=Application
 Categories=System;
 EOF
 
-    # Update desktop database (guarded)
-    echo "Updating desktop database..."
     if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH"
     fi
+}
 
-    echo "DPM installation completed successfully!"
-    echo "You can find the application in your system's menu."
-    echo "Saved files will be stored in $SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
+uninstall_service_component() {
+    echo "Removing service component..."
+    systemctl stop dpm-node.service >/dev/null 2>&1 || echo "Service not running."
+    systemctl disable dpm-node.service >/dev/null 2>&1 || echo "Service not enabled."
+    rm -f /etc/systemd/system/dpm-node.service
+    systemctl daemon-reload
+    rm -f /etc/security/limits.d/99-dpm-realtime.conf
+    rm -rf "$DPM_LOG_DIR"
+}
 
+uninstall_gui_component() {
+    echo "Removing GUI component..."
+    rm -f "$DESKTOP_ENTRY_INSTALL_PATH/$DESKTOP_ENTRY_NAME"
+    if command -v xdg-icon-resource >/dev/null 2>&1; then
+        xdg-icon-resource uninstall --size 256 "$DPM_ICON_NAME" || true
+    else
+        rm -f "$DPM_ICON_INSTALL_PATH/$DPM_ICON_NAME.png" || true
+    fi
+
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$DESKTOP_ENTRY_INSTALL_PATH" || true
+    fi
+
+    SUDO_USER_HOME=$(get_sudo_user_home)
+    if [ -d "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME" ]; then
+        rm -rf "$SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
+    fi
+}
+
+uninstall() {
+    target="$1"
+    echo "Starting DPM uninstallation target=$target..."
+
+    if [ "$target" = "service" ] || [ "$target" = "both" ]; then
+        uninstall_service_component
+    fi
+
+    if [ "$target" = "gui" ] || [ "$target" = "both" ]; then
+        uninstall_gui_component
+    fi
+
+    if [ "$target" = "both" ]; then
+        echo "Removing shared runtime in $DPM_INSTALL_DIR..."
+        rm -rf "$DPM_INSTALL_DIR"
+    fi
+
+    echo "DPM uninstallation completed successfully."
+    echo "Note: The user '$DPM_SERVICE_USER' was not removed."
+    exit 0
+}
+
+install() {
+    target="$1"
+    echo "Starting DPM installation target=$target..."
+
+    prepare_runtime "$target"
+
+    if [ "$target" = "service" ] || [ "$target" = "both" ]; then
+        install_service_component
+    fi
+
+    if [ "$target" = "gui" ] || [ "$target" = "both" ]; then
+        install_gui_component
+        SUDO_USER_HOME=$(get_sudo_user_home)
+        echo "You can find the application in your system's menu."
+        echo "Saved files will be stored in $SUDO_USER_HOME/$DPM_SAVE_DIR_NAME"
+    fi
+
+    echo "DPM installation completed successfully."
     exit 0
 }
 
 # --- Main script ---
-case "$1" in
+ACTION="$1"
+TARGET="${2:-both}"
+
+validate_target "$TARGET"
+
+case "$ACTION" in
     install)
-        install
+        install "$TARGET"
         ;;
     uninstall)
-        uninstall
+        uninstall "$TARGET"
         ;;
     *)
-        echo "Usage: $0 {install|uninstall}"
+        usage
         exit 1
         ;;
 esac
