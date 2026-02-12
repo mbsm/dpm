@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Logs and runtime
+logs/
+*.log
+saved/
+*.pid
+*.json
+
+# Generated files
+*.pyc
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Python tooling
+.coverage
+.cache
+.pytest_cache/
+
+# Ignore local packaging installers output
+dist/
+
+#ignore AI Agents instructions
+.github
+
+# Keep other repo assets tracked
+# (uncomment below to ignore generated LCM bindings if you prefer)
+# src/dpm_msgs/
