@@ -3,6 +3,8 @@
 DPM is a lightweight distributed process manager for trusted Linux clusters.
 It uses LCM multicast for control and telemetry.
 
+> Project note: DPM is inspired by `libbot procman` and is built primarily as a learning project.
+
 ## What it does
 
 - Runs an agent per host to manage local processes.

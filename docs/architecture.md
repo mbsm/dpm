@@ -4,6 +4,8 @@
 
 DPM is a distributed process manager intended for **trusted environments** (e.g., a robot’s onboard cluster). It uses **LCM** for message transport.
 
+This project is inspired by `libbot procman` and is developed primarily for learning.
+
 DPM has two primary roles:
 
 - **Agent (Node)**: runs on each Linux host (typically as a `systemd` service). It starts/stops/monitors local processes and reports state/output back to the controller.
