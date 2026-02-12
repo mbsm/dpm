@@ -40,8 +40,8 @@ saved/
 # Ignore local packaging installers output
 dist/
 
-#ignore AI Agents instructions
-.github
+# Keep repository metadata tracked
+# .github/
 
 # Keep other repo assets tracked
 # (uncomment below to ignore generated LCM bindings if you prefer)
