@@ -40,6 +40,7 @@ class Controller:
     """
 
     def __init__(self, config_path: str):
+        self.config_path = config_path
         self.config = self.load_config(config_path)
 
         self.command_channel = self.config["command_channel"]
@@ -90,7 +91,7 @@ class Controller:
             raise ValueError(
                 f"Error parsing YAML configuration file {config_path}: {e}"
             ) from e
-        except Exception as e:
+        except OSError as e:
             raise RuntimeError(
                 f"Unexpected error loading configuration file {config_path}: {e}"
             ) from e
@@ -137,7 +138,7 @@ class Controller:
             self._init_lcm()
             self._lcm_backoff_s = 0.25
             logging.info("Controller LCM reinitialized successfully.")
-        except Exception as e2:
+        except (OSError, RuntimeError) as e2:
             logging.exception("Controller LCM reinit failed: %s", e2)
 
     # -----------------
@@ -340,6 +341,28 @@ class Controller:
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
+
+    def reconnect_lcm(self, new_url: str) -> None:
+        """Change the LCM URL at runtime, persist to config file, and reconnect."""
+        was_running = self._running
+        self.stop()
+
+        self.lc_url = new_url
+        self.config["lcm_url"] = new_url
+        self._init_lcm()
+
+        # Persist the new URL back to dpm.yaml
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            raw["lcm_url"] = new_url
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                yaml.dump(raw, f, default_flow_style=False, allow_unicode=True)
+        except (OSError, yaml.YAMLError):
+            logging.exception("Failed to persist lcm_url to %s", self.config_path)
+
+        if was_running:
+            self.start()
 
     def _thread_func(self) -> None:
         while self._running:

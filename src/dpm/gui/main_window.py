@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QFileDialog,
     QFrame,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -162,6 +163,11 @@ class MainWindow(QMainWindow):
         load_action = QAction("&Load...", self)
         load_action.triggered.connect(self.load_processes_from_file)
         file_menu.addAction(load_action)
+
+        settings_menu = menu_bar.addMenu("&Settings")
+        lcm_url_action = QAction("Change &LCM URL...", self)
+        lcm_url_action.triggered.connect(self._change_lcm_url)
+        settings_menu.addAction(lcm_url_action)
 
         node_menu = menu_bar.addMenu("&Node")
         spawn_action = QAction("&Spawn Local Node", self)
@@ -375,7 +381,7 @@ class MainWindow(QMainWindow):
             ts_us = getattr(info, "timestamp", 0) or 0
             try:
                 age = now - (float(ts_us) * 1e-6)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 age = float("inf")
             offline = age > HOST_OFFLINE_THRESHOLD_SEC
 
@@ -388,7 +394,7 @@ class MainWindow(QMainWindow):
                     if mem_total
                     else float(getattr(info, "mem_usage", 0.0) or 0.0)
                 )
-            except Exception:
+            except (TypeError, ValueError, ZeroDivisionError):
                 mem_frac = float(getattr(info, "mem_usage", 0.0) or 0.0)
 
             cpu_pct = max(0, min(100, int(round(cpu_frac * 100))))
@@ -596,7 +602,7 @@ class MainWindow(QMainWindow):
         pr = getattr(proc, "priority", None)
         try:
             pr_i = int(pr) if pr is not None else -1
-        except Exception:
+        except (TypeError, ValueError):
             pr_i = -1
 
         if pr_i == -1:
@@ -803,6 +809,25 @@ class MainWindow(QMainWindow):
             self.load_processes()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
+
+    def _change_lcm_url(self):
+        current = getattr(self.controller, "lc_url", "")
+        new_url, ok = QInputDialog.getText(
+            self,
+            "Change LCM URL",
+            "Enter new LCM URL (e.g. udpm://239.255.76.68:7667?ttl=1):",
+            text=current,
+        )
+        if not ok or not new_url.strip():
+            return
+        new_url = new_url.strip()
+        try:
+            self.controller.reconnect_lcm(new_url)
+            QMessageBox.information(
+                self, "LCM URL", f"LCM URL updated to:\n{new_url}"
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to change LCM URL:\n{e}")
 
     def spawn_local_node(self):
         try:
@@ -1049,7 +1074,7 @@ class MainWindow(QMainWindow):
                 for p in self.controller.procs.values()
                 if (getattr(p, "group", "") or "(ungrouped)") == group_name
             ]
-        except Exception:
+        except (AttributeError, TypeError):
             return []
 
     def _start_group(self, group_name: str):

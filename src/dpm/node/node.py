@@ -24,6 +24,10 @@ STATE_RUNNING = "R"
 STATE_FAILED = "F"
 STATE_KILLED = "K"
 
+# Maximum bytes sent per process per publish cycle. Prevents a chatty process
+# from producing LCM messages too large to fragment reliably over UDP.
+MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
+
 try:
     from dpm_msgs import (
         command_t,
@@ -80,7 +84,7 @@ def is_running(proc: psutil.Popen | None) -> bool:
     return proc.poll() is None
 
 
-def stream_reader(stream, output_list) -> None:
+def stream_reader(stream, output_list, lock: threading.Lock) -> None:
     try:
         while True:
             line = stream.readline()
@@ -91,7 +95,8 @@ def stream_reader(stream, output_list) -> None:
                 line = line.decode("utf-8", errors="replace")
             line = line.rstrip("\r\n")
             if line:
-                output_list.append(line + "\n")
+                with lock:
+                    output_list.append(line + "\n")
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("Stream Reader: Captured line: %r", line)
     except (OSError, ValueError) as e:
@@ -169,7 +174,7 @@ class NodeAgent:
             self._init_lcm()
             self._lcm_backoff_s = 0.25  # reset on success
             logging.info("LCM reinitialized successfully.")
-        except Exception as e2:
+        except (OSError, RuntimeError) as e2:
             logging.error("LCM reinit failed: %s", e2)
 
     def load_config(self, config_path: str) -> dict:
@@ -184,7 +189,7 @@ class NodeAgent:
             raise ValueError(
                 f"Error parsing YAML configuration file {config_path}: {e}"
             ) from e
-        except Exception as e:
+        except OSError as e:
             raise RuntimeError(
                 f"Unexpected error loading configuration file {config_path}: {e}"
             ) from e
@@ -260,7 +265,10 @@ class NodeAgent:
         """Handle incoming command messages from the controller."""
         msg = command_t.decode(data)
 
-        # ...existing code (host filter etc)...
+        # Ignore commands not addressed to this host. An empty hostname is
+        # treated as a broadcast (applies to all nodes).
+        if msg.hostname and msg.hostname != self.hostname:
+            return
 
         action = msg.action
 
@@ -379,18 +387,22 @@ class NodeAgent:
             self.processes[process_name]["status"] = "running"
             self.processes[process_name]["errors"] = ""
 
-            # Start threads to read stdout and stderr
+            # Start threads to read stdout and stderr.
+            # A single lock guards both lists so the drain in monitor_process
+            # is always consistent with concurrent appends from the reader threads.
+            output_lock = threading.Lock()
             stdout_lines = []
             stderr_lines = []
             stdout_thread = threading.Thread(
-                target=stream_reader, args=(proc.stdout, stdout_lines), daemon=True
+                target=stream_reader, args=(proc.stdout, stdout_lines, output_lock), daemon=True
             )
             stderr_thread = threading.Thread(
-                target=stream_reader, args=(proc.stderr, stderr_lines), daemon=True
+                target=stream_reader, args=(proc.stderr, stderr_lines, output_lock), daemon=True
             )
             stdout_thread.start()
             stderr_thread.start()
 
+            self.processes[process_name]["output_lock"] = output_lock
             self.processes[process_name]["stdout_lines"] = stdout_lines
             self.processes[process_name]["stderr_lines"] = stderr_lines
 
@@ -451,7 +463,7 @@ class NodeAgent:
                 logging.debug(
                     "Start Process: Published startup error output for %s", process_name
                 )
-            except Exception as pub_e:
+            except OSError as pub_e:
                 logging.error(
                     "Start Process: Failed to publish startup error for %s: %s",
                     process_name,
@@ -534,7 +546,7 @@ class NodeAgent:
             pgid = os.getpgid(pid)
         except ProcessLookupError:
             return False
-        except Exception as e:
+        except OSError as e:
             logging.warning("Failed to resolve pgid for pid=%s: %s", pid, e)
             return False
 
@@ -543,7 +555,7 @@ class NodeAgent:
             return True
         except ProcessLookupError:
             return False
-        except Exception as e:
+        except OSError as e:
             logging.warning(
                 "Failed to signal process group pgid=%s sig=%s: %s", pgid, sig, e
             )
@@ -579,10 +591,12 @@ class NodeAgent:
             proc_info["proc"] = None
 
             # Capture any remaining output
-            stdout_content = "".join(proc_info["stdout_lines"])
-            stderr_content = "".join(proc_info["stderr_lines"])
-            proc_info["stdout_lines"].clear()
-            proc_info["stderr_lines"].clear()
+            output_lock = proc_info.get("output_lock") or threading.Lock()
+            with output_lock:
+                stdout_content = "".join(proc_info["stdout_lines"])
+                stderr_content = "".join(proc_info["stderr_lines"])
+                proc_info["stdout_lines"].clear()
+                proc_info["stderr_lines"].clear()
 
             if stdout_content or stderr_content:
                 proc_info["errors"] = stdout_content + stderr_content
@@ -597,7 +611,7 @@ class NodeAgent:
                     msg.stdout = stdout_content
                     msg.stderr = stderr_content
                     self.lc.publish(self.proc_outputs_channel, msg.encode())
-                except Exception as pub_e:
+                except OSError as pub_e:
                     logging.error(
                         "Monitor Process: Failed to publish output for %s: %s",
                         process_name,
@@ -612,14 +626,16 @@ class NodeAgent:
             return
 
         # Still running: pull any accumulated stream output into stdout/stderr buffers
-        stdout_content = "".join(proc_info["stdout_lines"])
-        stderr_content = "".join(proc_info["stderr_lines"])
-        if stdout_content:
-            proc_info["stdout"] += stdout_content
-        if stderr_content:
-            proc_info["stderr"] += stderr_content
-        proc_info["stdout_lines"].clear()
-        proc_info["stderr_lines"].clear()
+        output_lock = proc_info.get("output_lock") or threading.Lock()
+        with output_lock:
+            stdout_content = "".join(proc_info["stdout_lines"])
+            stderr_content = "".join(proc_info["stderr_lines"])
+            if stdout_content:
+                proc_info["stdout"] += stdout_content
+            if stderr_content:
+                proc_info["stderr"] += stderr_content
+            proc_info["stdout_lines"].clear()
+            proc_info["stderr_lines"].clear()
 
     def publish_host_info(self) -> None:
         """Publish host-wide telemetry (CPU, memory, network)."""
@@ -770,24 +786,31 @@ class NodeAgent:
         self.lc.publish(self.host_procs_channel, msg.encode())
 
     def publish_procs_outputs(self) -> None:
-        """Publish buffered stdout/stderr chunks for all processes."""
+        """Publish buffered stdout/stderr chunks for all processes.
+
+        At most MAX_OUTPUT_CHUNK bytes are sent per stream per call; any
+        remaining bytes stay in the buffer and are sent on the next cycle.
+        """
         for process_name, proc_info in self.processes.items():
             stdout = proc_info["stdout"]
             stderr = proc_info["stderr"]
             if not stdout and not stderr:
                 continue
 
+            stdout_chunk = stdout[:MAX_OUTPUT_CHUNK]
+            stderr_chunk = stderr[:MAX_OUTPUT_CHUNK]
+
             msg = proc_output_t()
             msg.timestamp = int(time.time() * 1e6)
             msg.name = process_name
             msg.hostname = self.hostname
             msg.group = proc_info["group"]
-            msg.stdout = stdout
-            msg.stderr = stderr
+            msg.stdout = stdout_chunk
+            msg.stderr = stderr_chunk
             self.lc.publish(self.proc_outputs_channel, msg.encode())
 
-            proc_info["stdout"] = ""
-            proc_info["stderr"] = ""
+            proc_info["stdout"] = stdout[len(stdout_chunk):]
+            proc_info["stderr"] = stderr[len(stderr_chunk):]
 
     def _group_matches(self, process_group: str, target_group: str | None) -> bool:
         pg = (process_group or "").strip()
@@ -836,7 +859,7 @@ class NodeAgent:
         for name in list(self.processes.keys()):
             try:
                 self.stop_process(name)
-            except Exception as e:
+            except (OSError, RuntimeError, ValueError) as e:
                 logging.warning("Shutdown: failed stopping %s: %s", name, e)
 
 

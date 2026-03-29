@@ -19,7 +19,7 @@ def save_process_spec(path: str, spec: Dict[str, Any], append: bool = False) -> 
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
-        except Exception:
+        except (OSError, yaml.YAMLError):
             data = None
 
         if isinstance(data, list):
@@ -93,7 +93,7 @@ def save_all_process_specs(
     """
     try:
         procs = controller.procs  # snapshot dict
-    except Exception:
+    except AttributeError:
         procs = {}
 
     specs: List[Dict[str, Any]] = []
@@ -128,7 +128,7 @@ def save_all_process_specs(
         try:
             with open(path, "r", encoding="utf-8") as f:
                 existing = yaml.safe_load(f)
-        except Exception:
+        except (OSError, yaml.YAMLError):
             existing = None
 
         if isinstance(existing, list):
