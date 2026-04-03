@@ -102,8 +102,8 @@ install_service_component() {
         useradd -r -s /bin/false "$DPM_SERVICE_USER"
     fi
 
-    # Grant GPU access (required on Jetson/NVIDIA for CUDA child processes)
-    for grp in video render; do
+    # Grant GPU and USB device access (required on Jetson for CUDA and RealSense cameras)
+    for grp in video render plugdev; do
         if getent group "$grp" >/dev/null 2>&1; then
             usermod -a -G "$grp" "$DPM_SERVICE_USER"
             echo "Added '$DPM_SERVICE_USER' to group '$grp'."
