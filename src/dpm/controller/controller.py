@@ -68,6 +68,9 @@ class Controller:
         # Incremented when a buffer is trimmed/reset so GUI can resync safely
         self._proc_output_buffer_gen: Dict[str, int] = {}
 
+        # Monotonic command sequence number (GUI thread only — no lock needed)
+        self._cmd_seq: int = 0
+
         # LCM instances (separate for thread-safety)
         self.lc_sub: Optional[lcm.LCM] = None
         self.lc_pub: Optional[lcm.LCM] = None
@@ -252,6 +255,8 @@ class Controller:
     def _publish(self, msg: command_t) -> None:
         if self.lc_pub is None:
             raise RuntimeError("LCM publisher not initialized.")
+        msg.seq = self._cmd_seq
+        self._cmd_seq += 1
         self.lc_pub.publish(self.command_channel, msg.encode())
 
     def create_proc(
@@ -352,6 +357,7 @@ class Controller:
         self._init_lcm()
 
         # Persist the new URL back to dpm.yaml
+        logging.warning("Persisting new lcm_url %r to %s", new_url, self.config_path)
         try:
             with open(self.config_path, "r", encoding="utf-8") as f:
                 raw = yaml.safe_load(f) or {}

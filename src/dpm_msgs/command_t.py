@@ -10,13 +10,14 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime"]
+    __slots__ = ["seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime"]
 
-    __typenames__ = ["string", "string", "string", "string", "string", "boolean", "boolean"]
+    __typenames__ = ["int64_t", "string", "string", "string", "string", "string", "boolean", "boolean"]
 
-    __dimensions__ = [None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None]
 
     def __init__(self):
+        self.seq = 0
         self.name = ""
         self.group = ""
         self.hostname = ""
@@ -32,6 +33,7 @@ class command_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
+        buf.write(struct.pack(">q", self.seq))
         __name_encoded = self.name.encode('utf-8')
         buf.write(struct.pack('>I', len(__name_encoded)+1))
         buf.write(__name_encoded)
@@ -66,6 +68,7 @@ class command_t(object):
 
     def _decode_one(buf):
         self = command_t()
+        self.seq = struct.unpack(">q", buf.read(8))[0]
         __name_len = struct.unpack('>I', buf.read(4))[0]
         self.name = buf.read(__name_len)[:-1].decode('utf-8', 'replace')
         __group_len = struct.unpack('>I', buf.read(4))[0]
@@ -83,7 +86,7 @@ class command_t(object):
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0xbc5aeb8ea1c6f3b5) & 0xffffffffffffffff
+        tmphash = (0xde168243a01763a6) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

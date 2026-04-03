@@ -2,6 +2,9 @@ package dpm_msgs;
 
 struct command_t
 {
+    // monotonically increasing sequence number for deduplication
+    int64_t seq;
+
     // id of the command
     string  name;
 

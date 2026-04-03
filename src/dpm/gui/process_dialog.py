@@ -90,6 +90,7 @@ class ProcessDialog(QDialog):
                 old_host = getattr(self.proc, "hostname", host)
                 old_name = getattr(self.proc, "name", None)
                 if old_name:
+                    self.controller.stop_proc(old_name, old_host)
                     self.controller.del_proc(old_name, old_host)
                 self.controller.create_proc(
                     name, proc_command, group, host, auto_restart, realtime

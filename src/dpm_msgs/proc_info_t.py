@@ -12,7 +12,7 @@ import struct
 class proc_info_t(object):
     __slots__ = ["name", "group", "hostname", "state", "status", "errors", "exec_command", "cpu", "mem_rss", "mem_vms", "priority", "pid", "ppid", "auto_restart", "realtime", "exit_code", "runtime"]
 
-    __typenames__ = ["string", "string", "string", "string", "string", "string", "string", "float", "int32_t", "int32_t", "int32_t", "int32_t", "int32_t", "boolean", "boolean", "int8_t", "int32_t"]
+    __typenames__ = ["string", "string", "string", "string", "string", "string", "string", "float", "int64_t", "int64_t", "int32_t", "int32_t", "int32_t", "boolean", "boolean", "int32_t", "int32_t"]
 
     __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
@@ -70,7 +70,7 @@ class proc_info_t(object):
         buf.write(struct.pack('>I', len(__exec_command_encoded)+1))
         buf.write(__exec_command_encoded)
         buf.write(b"\0")
-        buf.write(struct.pack(">fiiiiibbbi", self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid, self.auto_restart, self.realtime, self.exit_code, self.runtime))
+        buf.write(struct.pack(">fqqiiibbii", self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid, self.auto_restart, self.realtime, self.exit_code, self.runtime))
 
     def decode(data):
         if hasattr(data, 'read'):
@@ -98,16 +98,16 @@ class proc_info_t(object):
         self.errors = buf.read(__errors_len)[:-1].decode('utf-8', 'replace')
         __exec_command_len = struct.unpack('>I', buf.read(4))[0]
         self.exec_command = buf.read(__exec_command_len)[:-1].decode('utf-8', 'replace')
-        self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid = struct.unpack(">fiiiii", buf.read(24))
+        self.cpu, self.mem_rss, self.mem_vms, self.priority, self.pid, self.ppid = struct.unpack(">fqqiii", buf.read(32))
         self.auto_restart = bool(struct.unpack('b', buf.read(1))[0])
         self.realtime = bool(struct.unpack('b', buf.read(1))[0])
-        self.exit_code, self.runtime = struct.unpack(">bi", buf.read(5))
+        self.exit_code, self.runtime = struct.unpack(">ii", buf.read(8))
         return self
     _decode_one = staticmethod(_decode_one)
 
     def _get_hash_recursive(parents):
         if proc_info_t in parents: return 0
-        tmphash = (0x8d4d3c3cc3a8a525) & 0xffffffffffffffff
+        tmphash = (0xd0826dfba2cb5209) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

@@ -146,8 +146,3 @@ def save_all_process_specs(
 
     return len(specs), skipped
 
-
-def save_current_processes(
-    path: str, controller, append: bool = False
-) -> Tuple[int, int]:
-    return save_all_process_specs(path, controller, append=append)

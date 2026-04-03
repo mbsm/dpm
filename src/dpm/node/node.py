@@ -135,6 +135,10 @@ class NodeAgent:
 
         self._stop_event = threading.Event()
 
+        # Track last seen seq per sender to drop UDP duplicates.
+        # Key: (hostname, action, name) — value: last accepted seq.
+        self._last_seq: dict = {}
+
         # Graceful shutdown (systemd sends SIGTERM)
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -269,6 +273,14 @@ class NodeAgent:
         # treated as a broadcast (applies to all nodes).
         if msg.hostname and msg.hostname != self.hostname:
             return
+
+        # Drop UDP duplicates using the monotonic seq number.
+        dedup_key = (msg.hostname, msg.action, msg.name)
+        last = self._last_seq.get(dedup_key, -1)
+        if msg.seq <= last:
+            logging.debug("Dropping duplicate command seq=%d key=%s", msg.seq, dedup_key)
+            return
+        self._last_seq[dedup_key] = msg.seq
 
         action = msg.action
 

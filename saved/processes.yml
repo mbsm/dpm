@@ -1,54 +1,55 @@
-- auto_restart: false
-  group: Planning
+- name: Navigator Node
   host: HP-Z820-Workstation
-  name: Navigator Node
-  realtime: false
   exec_command: /home/mbustos/projects/agv1/nodes/bin/navigator_node
-- auto_restart: false
   group: Planning
-  host: HP-Z820-Workstation
-  name: Planner Node
+  auto_restart: false
   realtime: false
+- name: Planner Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/planner_node
-- auto_restart: false
   group: Planning
-  host: HP-Z820-Workstation
-  name: Motion Controller Node
+  auto_restart: false
   realtime: false
+- name: Motion Controller Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/motion_controller_node
-- auto_restart: false
-  group: Perception
-  host: HP-Z820-Workstation
-  name: UKF Node
-  realtime: true
-  exec_command: /home/mbustos/projects/agv1/nodes/bin/ukf_node
-- auto_restart: false
-  group: Perception
-  host: HP-Z820-Workstation
-  name: Obstacle Detection Node
+  group: Planning
+  auto_restart: false
   realtime: false
+- name: Obstacle Detection Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/obstacle_detection_node -u=udpm://239.255.76.67:7667?ttl=0
-- auto_restart: false
-  group: Sensors
-  host: HP-Z820-Workstation
-  name: VLP 16 Node
+  group: Perception
+  auto_restart: false
   realtime: false
+- name: VLP 16 Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/vlp16_node
-- auto_restart: false
   group: Sensors
-  host: HP-Z820-Workstation
-  name: Ahrs Node
+  auto_restart: false
   realtime: false
+- name: Ahrs Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/gx5_ahrs_node
-- auto_restart: false
   group: Sensors
-  host: HP-Z820-Workstation
-  name: GPS Node
+  auto_restart: false
   realtime: false
-  exec_command: python3 /home/mbustos/projects/agv1/nodes/gps_node/src/gps_F9P_node.py -d=/tmp/f9p_faux_serial
-- auto_restart: false
-  group: Simulation
+- name: GPS Node
   host: HP-Z820-Workstation
-  name: Simulator Node
+  exec_command: python3 /home/mbustos/projects/agv1/nodes/gps_node/src/gps_F9P_node.py
+    -d=/tmp/f9p_faux_serial
+  group: Sensors
+  auto_restart: false
   realtime: false
+- name: Simulator Node
+  host: HP-Z820-Workstation
   exec_command: /home/mbustos/projects/agv1/nodes/bin/simulator_node
+  group: Simulation
+  auto_restart: false
+  realtime: false
+- name: Localization Node
+  host: HP-Z820-Workstation
+  exec_command: /home/mbustos/projects/agv1/nodes/bin/localization_node
+  group: Perception
+  auto_restart: false
+  realtime: true
