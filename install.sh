@@ -102,6 +102,14 @@ install_service_component() {
         useradd -r -s /bin/false "$DPM_SERVICE_USER"
     fi
 
+    # Grant GPU access (required on Jetson/NVIDIA for CUDA child processes)
+    for grp in video render; do
+        if getent group "$grp" >/dev/null 2>&1; then
+            usermod -a -G "$grp" "$DPM_SERVICE_USER"
+            echo "Added '$DPM_SERVICE_USER' to group '$grp'."
+        fi
+    done
+
     mkdir -p "$DPM_LOG_DIR"
     chown "$DPM_SERVICE_USER:$DPM_SERVICE_USER" "$DPM_LOG_DIR"
 
