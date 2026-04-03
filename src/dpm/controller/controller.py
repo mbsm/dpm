@@ -148,12 +148,20 @@ class Controller:
     # LCM handlers (background thread)
     # -----------------
     def host_info_handler(self, _channel, data) -> None:
-        msg = host_info_t.decode(data)
+        try:
+            msg = host_info_t.decode(data)
+        except Exception as e:
+            logging.error("host_info_handler: decode failed: %s", e)
+            return
         with self._hosts_lock:
             self._hosts[msg.hostname] = msg
 
     def host_procs_handler(self, _channel, data) -> None:
-        msg = host_procs_t.decode(data)
+        try:
+            msg = host_procs_t.decode(data)
+        except Exception as e:
+            logging.error("host_procs_handler: decode failed: %s", e)
+            return
         hostname = msg.hostname
 
         # Update atomically under lock (avoid GUI races)
@@ -174,7 +182,11 @@ class Controller:
                 self._procs[p.name] = p
 
     def proc_outputs_handler(self, _channel, data) -> None:
-        msg = proc_output_t.decode(data)
+        try:
+            msg = proc_output_t.decode(data)
+        except Exception as e:
+            logging.error("proc_outputs_handler: decode failed: %s", e)
+            return
         name = msg.name
 
         out = getattr(msg, "stdout", "") or ""

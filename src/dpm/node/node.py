@@ -57,16 +57,16 @@ def get_ip() -> str:
 
 
 class Timer:
-    """Simple periodic timer helper."""
+    """Simple periodic timer helper. Uses monotonic clock to be NTP-safe."""
 
     def __init__(self, timeout: float):
-        now = time.time()
+        now = time.monotonic()
         self.t0 = now
         self.period = timeout
         self.next = now + timeout
 
     def timeout(self) -> bool:
-        now = time.time()
+        now = time.monotonic()
         if now > self.next:
             self.next += self.period
             return True
@@ -137,7 +137,10 @@ class NodeAgent:
 
         # Track last seen seq per sender to drop UDP duplicates.
         # Key: (hostname, action, name) — value: last accepted seq.
+        # Capped at _LAST_SEQ_MAX_KEYS entries to prevent unbounded growth.
         self._last_seq: dict = {}
+        self._last_seq_lock = threading.Lock()
+        self._LAST_SEQ_MAX_KEYS = 1000
 
         # Graceful shutdown (systemd sends SIGTERM)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -213,6 +216,18 @@ class NodeAgent:
         for field in required_fields:
             if field not in config:
                 raise KeyError(f"Missing required configuration field: {field}")
+
+        # Validate numeric ranges to prevent tight loops or indefinite hangs
+        for interval_key in ("monitor_interval", "output_interval",
+                             "host_status_interval", "procs_status_interval"):
+            val = config[interval_key]
+            if not isinstance(val, (int, float)) or val < 0.05:
+                raise ValueError(f"{interval_key} must be a number >= 0.05, got {val!r}")
+
+        stop_timeout = config["stop_timeout"]
+        if not isinstance(stop_timeout, (int, float)) or stop_timeout <= 0 or stop_timeout > 300:
+            raise ValueError(f"stop_timeout must be a number in (0, 300], got {stop_timeout!r}")
+
         return config
 
     def init_logging(self):
@@ -276,11 +291,16 @@ class NodeAgent:
 
         # Drop UDP duplicates using the monotonic seq number.
         dedup_key = (msg.hostname, msg.action, msg.name)
-        last = self._last_seq.get(dedup_key, -1)
-        if msg.seq <= last:
-            logging.debug("Dropping duplicate command seq=%d key=%s", msg.seq, dedup_key)
-            return
-        self._last_seq[dedup_key] = msg.seq
+        with self._last_seq_lock:
+            last = self._last_seq.get(dedup_key, -1)
+            if msg.seq <= last:
+                logging.debug("Dropping duplicate command seq=%d key=%s", msg.seq, dedup_key)
+                return
+            # Evict oldest entry if cap reached to bound memory usage
+            if len(self._last_seq) >= self._LAST_SEQ_MAX_KEYS and dedup_key not in self._last_seq:
+                oldest = next(iter(self._last_seq))
+                del self._last_seq[oldest]
+            self._last_seq[dedup_key] = msg.seq
 
         action = msg.action
 
@@ -685,7 +705,11 @@ class NodeAgent:
         msg.network_recv = recv_kbps / 1024
         msg.uptime = uptime
 
-        self.lc.publish(self.host_info_channel, msg.encode())
+        try:
+            self.lc.publish(self.host_info_channel, msg.encode())
+        except OSError as e:
+            logging.error("Failed to publish host info: %s", e)
+            self._handle_lcm_error(e)
 
     def _htop_priority(self, pid: int) -> int:
         """
@@ -795,7 +819,11 @@ class NodeAgent:
             msg.procs.append(msg_proc)
             msg.num_procs += 1
 
-        self.lc.publish(self.host_procs_channel, msg.encode())
+        try:
+            self.lc.publish(self.host_procs_channel, msg.encode())
+        except OSError as e:
+            logging.error("Failed to publish host procs: %s", e)
+            self._handle_lcm_error(e)
 
     def publish_procs_outputs(self) -> None:
         """Publish buffered stdout/stderr chunks for all processes.
@@ -819,7 +847,12 @@ class NodeAgent:
             msg.group = proc_info["group"]
             msg.stdout = stdout_chunk
             msg.stderr = stderr_chunk
-            self.lc.publish(self.proc_outputs_channel, msg.encode())
+            try:
+                self.lc.publish(self.proc_outputs_channel, msg.encode())
+            except OSError as e:
+                logging.error("Failed to publish proc output for %s: %s", process_name, e)
+                self._handle_lcm_error(e)
+                return  # stop publishing this cycle; LCM will be reinitialized
 
             proc_info["stdout"] = stdout[len(stdout_chunk):]
             proc_info["stderr"] = stderr[len(stderr_chunk):]
@@ -855,16 +888,28 @@ class NodeAgent:
 
             if self.monitor_timer.timeout():
                 for process_name in list(self.processes.keys()):
-                    self.monitor_process(process_name)
+                    try:
+                        self.monitor_process(process_name)
+                    except Exception as e:
+                        logging.error("monitor_process %s raised: %s", process_name, e, exc_info=True)
 
             if self.output_timer.timeout():
-                self.publish_procs_outputs()
+                try:
+                    self.publish_procs_outputs()
+                except Exception as e:
+                    logging.error("publish_procs_outputs raised: %s", e, exc_info=True)
 
             if self.host_status_timer.timeout():
-                self.publish_host_info()
+                try:
+                    self.publish_host_info()
+                except Exception as e:
+                    logging.error("publish_host_info raised: %s", e, exc_info=True)
 
             if self.procs_status_timer.timeout():
-                self.publish_host_procs()
+                try:
+                    self.publish_host_procs()
+                except Exception as e:
+                    logging.error("publish_host_procs raised: %s", e, exc_info=True)
 
         # Optional: stop everything on shutdown (recommended for systemd)
         logging.info("Stopping managed processes...")

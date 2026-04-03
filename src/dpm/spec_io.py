@@ -36,6 +36,22 @@ def save_process_spec(path: str, spec: Dict[str, Any], append: bool = False) -> 
         yaml.safe_dump(out, f, sort_keys=False)
 
 
+def _validate_spec(spec: Dict[str, Any]) -> None:
+    """Raise ValueError if a spec entry has wrong types or missing required fields."""
+    for field in ("name", "host", "exec_command"):
+        val = spec.get(field)
+        if not isinstance(val, str) or not val.strip():
+            raise ValueError(f"spec field '{field}' must be a non-empty string, got {val!r}")
+    for field in ("group",):
+        val = spec.get(field, "")
+        if not isinstance(val, str):
+            raise ValueError(f"spec field '{field}' must be a string, got {val!r}")
+    for field in ("auto_restart", "realtime"):
+        val = spec.get(field, False)
+        if not isinstance(val, bool):
+            raise ValueError(f"spec field '{field}' must be a boolean, got {val!r}")
+
+
 def load_process_specs(path: str) -> List[Dict[str, Any]]:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
@@ -62,17 +78,13 @@ def load_and_create(
     specs = load_process_specs(path)
     for spec in specs:
         try:
-            name = spec.get("name")
-            host = spec.get("host")
-            exec_command = spec.get("exec_command")
+            _validate_spec(spec)
+            name = spec["name"]
+            host = spec["host"]
+            exec_command = spec["exec_command"]
             group = spec.get("group", "")
             auto_restart = bool(spec.get("auto_restart", False))
             realtime = bool(spec.get("realtime", False))
-
-            if not name or not host or not exec_command:
-                raise ValueError(
-                    "spec missing required fields: name, host, exec_command"
-                )
 
             controller.create_proc(
                 name, exec_command, group, host, auto_restart, realtime
