@@ -949,10 +949,10 @@ class MainWindow(QMainWindow):
         return COLOR_GRAY
 
     def _usage_color(self, pct: int) -> QColor:
-        """Green < 40%, Yellow 40–70%, Red > 70%."""
-        if pct < 40:
+        """Green < 60%, Yellow 60–80%, Red > 80%."""
+        if pct < 60:
             return COLOR_GREEN
-        if pct <= 70:
+        if pct <= 80:
             return COLOR_YELLOW
         return COLOR_RED
 
