@@ -12,28 +12,38 @@ from typing import Any, Dict, List, Tuple
 import yaml
 
 
-def save_process_spec(path: str, spec: Dict[str, Any], append: bool = False) -> None:
+def _merge_and_write(path: str, new_items: List[Dict[str, Any]], append: bool) -> None:
+    """Write new_items to a YAML file, merging with existing content when append=True."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
     if append and os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
+                existing = yaml.safe_load(f)
         except (OSError, yaml.YAMLError):
-            data = None
+            existing = None
 
-        if isinstance(data, list):
-            data.append(spec)
-            out = data
-        elif isinstance(data, dict):
-            out = [data, spec]
+        if isinstance(existing, list):
+            out = existing + new_items
+        elif isinstance(existing, dict):
+            out = [existing] + new_items
         else:
-            out = [spec]
+            out = new_items
     else:
-        out = spec
+        # Single item written as dict for readability; multiple items as list
+        out = new_items[0] if len(new_items) == 1 else new_items
 
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(out, f, sort_keys=False)
+
+
+def save_process_spec(path: str, spec: Dict[str, Any], append: bool = False) -> None:
+    if append:
+        _merge_and_write(path, [spec], append=True)
+    else:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(spec, f, sort_keys=False)
 
 
 def _validate_spec(spec: Dict[str, Any]) -> None:
@@ -134,27 +144,5 @@ def save_all_process_specs(
             }
         )
 
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-
-    if append and os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                existing = yaml.safe_load(f)
-        except (OSError, yaml.YAMLError):
-            existing = None
-
-        if isinstance(existing, list):
-            existing.extend(specs)
-            out = existing
-        elif isinstance(existing, dict):
-            out = [existing] + specs
-        else:
-            out = specs
-    else:
-        out = specs
-
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(out, f, sort_keys=False)
-
+    _merge_and_write(path, specs, append=append)
     return len(specs), skipped
-

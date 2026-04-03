@@ -61,7 +61,6 @@ class Timer:
 
     def __init__(self, timeout: float):
         now = time.monotonic()
-        self.t0 = now
         self.period = timeout
         self.next = now + timeout
 
@@ -333,13 +332,10 @@ class NodeAgent:
         self, process_name, exec_command, auto_restart, realtime, group
     ) -> None:
         """Register a process definition without starting it."""
-        """
-        Canonical internal schema (dict):
-          proc, exec_command, auto_restart, realtime, group, state, status, errors, exit_code, stdout, stderr
-        """
         self.processes[process_name] = {
             "proc": None,
-            "ps_proc": None,  # <-- keep a persistent psutil.Process for cpu sampling
+            "ps_proc": None,
+            "output_lock": threading.Lock(),
             "exec_command": exec_command,
             "auto_restart": bool(auto_restart),
             "realtime": bool(realtime),
@@ -538,9 +534,6 @@ class NodeAgent:
             proc_info["exit_code"] = proc.returncode
             proc_info["state"] = STATE_READY
             proc_info["status"] = "stopped"
-            proc_info["proc"] = None
-            proc_info["ps_proc"] = None  # CLEAR
-            return
 
         except psutil.TimeoutExpired:
             # Escalate to SIGKILL for the group
@@ -562,8 +555,10 @@ class NodeAgent:
             proc_info["exit_code"] = proc.returncode
             proc_info["state"] = STATE_KILLED
             proc_info["status"] = "killed"
+
+        finally:
             proc_info["proc"] = None
-            proc_info["ps_proc"] = None  # CLEAR
+            proc_info["ps_proc"] = None
 
     def _handle_signal(self, signum, frame) -> None:
         logging.info("Received signal %s; shutting down.", signum)
@@ -623,7 +618,7 @@ class NodeAgent:
             proc_info["proc"] = None
 
             # Capture any remaining output
-            output_lock = proc_info.get("output_lock") or threading.Lock()
+            output_lock = proc_info["output_lock"]
             with output_lock:
                 stdout_content = "".join(proc_info["stdout_lines"])
                 stderr_content = "".join(proc_info["stderr_lines"])
@@ -658,7 +653,7 @@ class NodeAgent:
             return
 
         # Still running: pull any accumulated stream output into stdout/stderr buffers
-        output_lock = proc_info.get("output_lock") or threading.Lock()
+        output_lock = proc_info["output_lock"]
         with output_lock:
             stdout_content = "".join(proc_info["stdout_lines"])
             stderr_content = "".join(proc_info["stderr_lines"])
@@ -738,6 +733,16 @@ class NodeAgent:
         except (psutil.Error, OSError, ValueError):
             return None
 
+    @staticmethod
+    def _zero_proc_metrics(msg_proc: proc_info_t) -> None:
+        msg_proc.cpu = 0.0
+        msg_proc.mem_rss = 0
+        msg_proc.mem_vms = 0
+        msg_proc.priority = -1
+        msg_proc.pid = -1
+        msg_proc.ppid = -1
+        msg_proc.runtime = 0
+
     def _fill_proc_metrics(
         self, msg_proc: proc_info_t, proc_info: dict, pid: int
     ) -> None:
@@ -805,16 +810,9 @@ class NodeAgent:
             if proc is not None and is_running(proc):
                 pid = int(proc.pid)
                 msg_proc.pid = pid
-
                 self._fill_proc_metrics(msg_proc, proc_info, pid)
             else:
-                msg_proc.cpu = 0.0
-                msg_proc.mem_rss = 0
-                msg_proc.mem_vms = 0
-                msg_proc.priority = -1
-                msg_proc.pid = -1
-                msg_proc.ppid = -1
-                msg_proc.runtime = 0
+                self._zero_proc_metrics(msg_proc)
 
             msg.procs.append(msg_proc)
             msg.num_procs += 1

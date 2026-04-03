@@ -219,7 +219,7 @@ class Controller:
                 )
 
             self._proc_output_buffers[name] = buf
-            self._proc_output_buffer_gen.setdefault(name, 0)
+            self._proc_output_buffer_gen.setdefault(name, 0)  # init on first message only
 
     def get_proc_output_delta(
         self, proc_name: str, last_gen: int, last_len: int
@@ -271,6 +271,26 @@ class Controller:
         self._cmd_seq += 1
         self.lc_pub.publish(self.command_channel, msg.encode())
 
+    def _send_command(
+        self,
+        action: str,
+        name: str = "",
+        hostname: str = "",
+        group: str = "",
+        exec_command: str = "",
+        auto_restart: bool = False,
+        realtime: bool = False,
+    ) -> None:
+        msg = command_t()
+        msg.action = action
+        msg.name = name
+        msg.hostname = hostname
+        msg.group = group
+        msg.exec_command = exec_command
+        msg.auto_restart = bool(auto_restart)
+        msg.realtime = bool(realtime)
+        self._publish(msg)
+
     def create_proc(
         self,
         cmd_name: str,
@@ -280,68 +300,42 @@ class Controller:
         auto_restart: bool = False,
         realtime: bool = False,
     ) -> None:
-        msg = command_t()
-        msg.name = cmd_name
-        msg.group = group
-        msg.hostname = host
-        msg.action = "create_process"
-        msg.exec_command = proc_cmd
-        msg.auto_restart = bool(auto_restart)
-        msg.realtime = bool(realtime)
-        self._publish(msg)
+        self._send_command("create_process", name=cmd_name, hostname=host, group=group,
+                           exec_command=proc_cmd, auto_restart=auto_restart, realtime=realtime)
 
     def start_proc(self, cmd_name: str, host: str) -> None:
-        msg = command_t()
-        msg.name = cmd_name
-        msg.hostname = host
-        msg.action = "start_process"
-        self._publish(msg)
+        self._send_command("start_process", name=cmd_name, hostname=host)
 
     def stop_proc(self, cmd_name: str, host: str) -> None:
-        msg = command_t()
-        msg.name = cmd_name
-        msg.hostname = host
-        msg.action = "stop_process"
-        self._publish(msg)
+        self._send_command("stop_process", name=cmd_name, hostname=host)
 
     def del_proc(self, cmd_name: str, host: str) -> None:
-        msg = command_t()
-        msg.name = cmd_name
-        msg.hostname = host
-        msg.action = "delete_process"
-        self._publish(msg)
+        self._send_command("delete_process", name=cmd_name, hostname=host)
 
     def start_group(self, group: str, host: str) -> None:
-        msg = command_t()
-        msg.group = group
-        msg.hostname = host
-        msg.action = "start_group"
-        self._publish(msg)
+        self._send_command("start_group", hostname=host, group=group)
 
     def stop_group(self, group: str, host: str) -> None:
-        msg = command_t()
-        msg.group = group
-        msg.hostname = host
-        msg.action = "stop_group"
-        self._publish(msg)
+        self._send_command("stop_group", hostname=host, group=group)
 
     # -----------------
     # Thread-safe snapshots for GUI
     # -----------------
+    def _snapshot(self, lock: threading.Lock, d: dict) -> dict:
+        with lock:
+            return dict(d)
+
     @property
     def hosts(self) -> Dict[str, host_info_t]:
-        with self._hosts_lock:
-            return dict(self._hosts)
+        return self._snapshot(self._hosts_lock, self._hosts)
 
     @property
     def procs(self) -> Dict[str, proc_info_t]:
-        with self._procs_lock:
-            return dict(self._procs)
+        return self._snapshot(self._procs_lock, self._procs)
 
     @property
     def proc_outputs(self) -> Dict[str, proc_output_t]:
-        with self._outputs_lock:
-            return dict(self._proc_outputs)
+        return self._snapshot(self._outputs_lock, self._proc_outputs)
 
     # -----------------
     # Thread management

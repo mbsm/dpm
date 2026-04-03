@@ -244,7 +244,7 @@ class MainWindow(QMainWindow):
 
         # initial population
         self.load_hosts()
-        self.load_processes()
+        self.refresh_processes_in_place()
 
         # widen window to show all columns
         self._ensure_min_width()
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.information(self, "Load Complete", summary)
 
-            self.load_processes()  # refresh the process list
+            self.refresh_processes_in_place()  # refresh the process list
         except Exception as e:
             logging.exception("Load failed: %s", e)
             QMessageBox.critical(self, "Error", f"Load failed: {e}")
@@ -620,10 +620,6 @@ class MainWindow(QMainWindow):
         """
         return ""
 
-    def load_processes(self):
-        # Single canonical implementation (remove the duplicate definition later in the file)
-        self.refresh_processes_in_place()
-
     def refresh_all(self):
         sel_host = self._selected_host()
 
@@ -640,45 +636,13 @@ class MainWindow(QMainWindow):
                     break
 
     def start_process(self):
-        proc_name = self._selected_proc()
-        host_name = self._selected_host()
-        if not proc_name:
-            QMessageBox.warning(self, "Warning", "No process selected.")
-            return
-        if not host_name:
-            QMessageBox.warning(self, "Warning", "No host selected.")
-            return
-        try:
-            self.controller.start_proc(proc_name, host_name)
-            self.refresh_processes_in_place()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to start process: {e}")
+        self._start_proc_direct(self._selected_proc(), self._selected_host())
 
     def stop_process(self):
-        proc_name = self._selected_proc()
-        host_name = self._selected_host()
-        if not proc_name:
-            QMessageBox.warning(self, "Warning", "No process selected.")
-            return
-        if not host_name:
-            QMessageBox.warning(self, "Warning", "No host selected.")
-            return
-        try:
-            self.controller.stop_proc(proc_name, host_name)
-            self.refresh_processes_in_place()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to stop process: {e}")
+        self._stop_proc_direct(self._selected_proc(), self._selected_host())
 
     def edit_process(self):
-        proc_name = self._selected_proc()
-        if not proc_name:
-            QMessageBox.warning(self, "Warning", "No process selected.")
-            return
-        proc = self.controller.procs.get(proc_name)
-        dlg = ProcessDialog(self.controller, proc)
-        if dlg.exec_():
-            # refresh lists after an edit/create
-            self.load_processes()
+        self._edit_proc_direct(self._selected_proc())
 
     def view_output(self):
         proc_name = self._selected_proc()
@@ -735,7 +699,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.start_proc(proc_name, host)
-            self.load_processes()
+            self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
                 self, "Error", f"Failed to start {proc_name}@{host}: {e}"
@@ -751,7 +715,7 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.stop_proc(proc_name, host)
-            self.load_processes()
+            self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
                 self, "Error", f"Failed to stop {proc_name}@{host}: {e}"
@@ -764,7 +728,7 @@ class MainWindow(QMainWindow):
         proc = self.controller.procs.get(proc_name)
         dlg = ProcessDialog(self.controller, proc)
         if dlg.exec_():
-            self.load_processes()
+            self.refresh_processes_in_place()
 
     def _delete_proc_direct(self, proc_name: str, host_name: str = None):
         if not proc_name:
@@ -781,34 +745,17 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller.del_proc(proc_name, host)
-            self.load_processes()
+            self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
 
     def new_process(self):
         dlg = ProcessDialog(self.controller, None)  # creation mode
         if dlg.exec_():
-            self.load_processes()
+            self.refresh_processes_in_place()
 
     def delete_process(self):
-        proc_name = self._selected_proc()
-        if not proc_name:
-            QMessageBox.warning(self, "Warning", "No process selected.")
-            return
-        host_name = self._selected_host()
-        if not host_name:
-            QMessageBox.warning(self, "Warning", "No host selected.")
-            return
-        if (
-            QMessageBox.question(self, "Confirm", f"Delete process '{proc_name}'?")
-            != QMessageBox.Yes
-        ):
-            return
-        try:
-            self.controller.del_proc(proc_name, host_name)
-            self.load_processes()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
+        self._delete_proc_direct(self._selected_proc(), self._selected_host())
 
     def _change_lcm_url(self):
         current = getattr(self.controller, "lc_url", "")
@@ -1077,11 +1024,11 @@ class MainWindow(QMainWindow):
         except (AttributeError, TypeError):
             return []
 
-    def _start_group(self, group_name: str):
+    def _execute_group_action(self, group_name: str, action_fn, label: str) -> None:
         procs = self._procs_in_group(group_name)
         if not procs:
             QMessageBox.information(
-                self, "Start All", f"No processes found in group '{group_name}'."
+                self, label, f"No processes found in group '{group_name}'."
             )
             return
         selected_host = self._selected_host()
@@ -1093,47 +1040,20 @@ class MainWindow(QMainWindow):
                 missing_host.append(p.name)
                 continue
             try:
-                self.controller.start_proc(p.name, host)
+                action_fn(p.name, host)
             except Exception as e:
                 failures.append(f"{p.name}@{host}: {e}")
-        self.load_processes()
+        self.refresh_processes_in_place()
         if missing_host:
-            QMessageBox.warning(
-                self, "Start All", f"No host for: {', '.join(missing_host)}"
-            )
+            QMessageBox.warning(self, label, f"No host for: {', '.join(missing_host)}")
         if failures:
-            QMessageBox.critical(
-                self, "Start All", "Some failed:\n" + "\n".join(failures)
-            )
+            QMessageBox.critical(self, label, "Some failed:\n" + "\n".join(failures))
+
+    def _start_group(self, group_name: str):
+        self._execute_group_action(group_name, self.controller.start_proc, "Start All")
 
     def _stop_group(self, group_name: str):
-        procs = self._procs_in_group(group_name)
-        if not procs:
-            QMessageBox.information(
-                self, "Stop All", f"No processes found in group '{group_name}'."
-            )
-            return
-        selected_host = self._selected_host()
-        failures = []
-        missing_host = []
-        for p in procs:
-            host = getattr(p, "hostname", "") or selected_host
-            if not host:
-                missing_host.append(p.name)
-                continue
-            try:
-                self.controller.stop_proc(p.name, host)
-            except Exception as e:
-                failures.append(f"{p.name}@{host}: {e}")
-        self.load_processes()
-        if missing_host:
-            QMessageBox.warning(
-                self, "Stop All", f"No host for: {', '.join(missing_host)}"
-            )
-        if failures:
-            QMessageBox.critical(
-                self, "Stop All", "Some failed:\n" + "\n".join(failures)
-            )
+        self._execute_group_action(group_name, self.controller.stop_proc, "Stop All")
 
     def _view_group_outputs(self, group_name: str):
         procs = self._procs_in_group(group_name)
