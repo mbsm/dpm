@@ -393,6 +393,11 @@ class NodeAgent:
             )
             return
 
+        # Clear any stale buffered output from a previous run so it isn't
+        # re-published after restart and mixed with the new process's output.
+        proc_info["stdout"] = ""
+        proc_info["stderr"] = ""
+
         logging.info(
             "Start Process: Starting process: %s with command: %s",
             process_name,

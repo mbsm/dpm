@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QDialog, QTextEdit, QVBoxLayout
 
 class ProcessOutput(QDialog):
     def __init__(
-        self, proc_name: str, initial_text: str = "", controller=None, parent=None
+        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, controller=None, parent=None
     ):
         super().__init__(parent)
         self.proc_name = proc_name
@@ -31,7 +31,7 @@ class ProcessOutput(QDialog):
 
         if initial_text:
             self.text.setPlainText(initial_text)
-            self._last_gen = 0
+            self._last_gen = initial_gen
             self._last_len = len(initial_text)
 
         self._timer = QTimer(self)

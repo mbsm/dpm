@@ -672,8 +672,9 @@ class MainWindow(QMainWindow):
 
         # Fetch full current buffer for this proc without copying whole dicts
         initial_text = ""
+        initial_gen = 0
         if hasattr(self.controller, "get_proc_output_delta"):
-            _gen, initial_text, _reset, _cur_len = (
+            initial_gen, initial_text, _reset, _cur_len = (
                 self.controller.get_proc_output_delta(
                     proc_name, last_gen=-1, last_len=0
                 )
@@ -682,6 +683,7 @@ class MainWindow(QMainWindow):
         dlg = ProcessOutput(
             proc_name,
             initial_text=initial_text,
+            initial_gen=initial_gen,
             controller=self.controller,
             parent=self,
         )
