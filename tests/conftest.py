@@ -15,20 +15,20 @@ def config_path():
 
 
 @pytest.fixture
-def node_agent(config_path):
-    """NodeAgent with mocked LCM — safe for unit tests (no network)."""
-    with patch("dpm.node.node.lcm.LCM") as MockLCM:
+def agent(config_path):
+    """Agent with mocked LCM — safe for unit tests (no network)."""
+    with patch("dpm.agent.agent.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        from dpm.node.node import NodeAgent
-        agent = NodeAgent(config_file=config_path)
-        yield agent
+        from dpm.agent.agent import Agent
+        a = Agent(config_file=config_path)
+        yield a
 
 
 @pytest.fixture
-def controller(config_path):
-    """Controller with mocked LCM — safe for unit tests (no network)."""
-    with patch("dpm.controller.controller.lcm.LCM") as MockLCM:
+def supervisor(config_path):
+    """Supervisor with mocked LCM — safe for unit tests (no network)."""
+    with patch("dpm.supervisor.supervisor.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        from dpm.controller.controller import Controller
-        ctrl = Controller(config_path)
-        yield ctrl
+        from dpm.supervisor.supervisor import Supervisor
+        s = Supervisor(config_path)
+        yield s

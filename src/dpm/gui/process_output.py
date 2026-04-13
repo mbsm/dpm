@@ -11,11 +11,11 @@ from PyQt5.QtWidgets import QDialog, QTextEdit, QVBoxLayout
 
 class ProcessOutput(QDialog):
     def __init__(
-        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, controller=None, parent=None
+        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, supervisor=None, parent=None
     ):
         super().__init__(parent)
         self.proc_name = proc_name
-        self.controller = controller
+        self.supervisor = supervisor
 
         self.setWindowTitle(f"Output: {proc_name}")
 
@@ -35,18 +35,18 @@ class ProcessOutput(QDialog):
             self._last_len = len(initial_text)
 
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh_from_controller)
+        self._timer.timeout.connect(self._refresh_from_supervisor)
         self._timer.start(500)
 
-    def _refresh_from_controller(self) -> None:
-        if self.controller is None:
+    def _refresh_from_supervisor(self) -> None:
+        if self.supervisor is None:
             return
 
-        if not hasattr(self.controller, "get_proc_output_delta"):
-            # Fallback: avoid crashing if controller is older; do nothing.
+        if not hasattr(self.supervisor, "get_proc_output_delta"):
+            # Fallback: avoid crashing if supervisor is older; do nothing.
             return
 
-        gen, delta, reset, cur_len = self.controller.get_proc_output_delta(
+        gen, delta, reset, cur_len = self.supervisor.get_proc_output_delta(
             self.proc_name,
             self._last_gen,
             self._last_len,

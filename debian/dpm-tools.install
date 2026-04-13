@@ -1,0 +1,2 @@
+debian/dpm-gui.desktop usr/share/applications/
+assets/icons/dpm-gui.png usr/share/icons/hicolor/256x256/apps/

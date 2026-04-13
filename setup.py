@@ -13,11 +13,15 @@ setup(
             'dpm-gui = dpm.gui.main:main',
         ],
         'console_scripts': [
-            'dpm-node = dpm.node.node:main',
+            'dpm-agent = dpm.agent.agent:main',
+            'dpm = dpm.cli.cli:main',
         ],
     },
     install_requires=[
-        # Add dependencies from requirements.txt here
-        # e.g., 'PyQt5', 'lcm', 'psutil', 'pyyaml'
+        'psutil>=5.9',
+        'PyYAML>=6.0',
     ],
+    extras_require={
+        'gui': ['PyQt5>=5.15'],
+    },
 )

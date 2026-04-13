@@ -1,5 +1,5 @@
 """
-Save / load process specs as YAML and create processes via Controller.
+Save / load process specs as YAML and create processes via Supervisor.
 
 Shared module used by both GUI and TUI (keeps GUI independent of dpm.tui.*).
 """
@@ -38,12 +38,7 @@ def _merge_and_write(path: str, new_items: List[Dict[str, Any]], append: bool) -
 
 
 def save_process_spec(path: str, spec: Dict[str, Any], append: bool = False) -> None:
-    if append:
-        _merge_and_write(path, [spec], append=True)
-    else:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(spec, f, sort_keys=False)
+    _merge_and_write(path, [spec], append=append)
 
 
 def _validate_spec(spec: Dict[str, Any]) -> None:
@@ -80,7 +75,7 @@ def load_process_specs(path: str) -> List[Dict[str, Any]]:
 
 
 def load_and_create(
-    path: str, controller
+    path: str, supervisor
 ) -> Tuple[List[str], List[Tuple[Dict[str, Any], str]]]:
     created: List[str] = []
     errors: List[Tuple[Dict[str, Any], str]] = []
@@ -96,7 +91,7 @@ def load_and_create(
             auto_restart = bool(spec.get("auto_restart", False))
             realtime = bool(spec.get("realtime", False))
 
-            controller.create_proc(
+            supervisor.create_proc(
                 name, exec_command, group, host, auto_restart, realtime
             )
             created.append(f"{name}@{host}")
@@ -107,14 +102,14 @@ def load_and_create(
 
 
 def save_all_process_specs(
-    path: str, controller, append: bool = False
+    path: str, supervisor, append: bool = False
 ) -> Tuple[int, int]:
     """
-    Save all processes known to controller into a YAML list.
+    Save all processes known to supervisor into a YAML list.
     Returns (written, skipped).
     """
     try:
-        procs = controller.procs  # snapshot dict
+        procs = supervisor.procs  # snapshot dict
     except AttributeError:
         procs = {}
 
@@ -144,5 +139,7 @@ def save_all_process_specs(
             }
         )
 
+    if not specs:
+        return 0, skipped
     _merge_and_write(path, specs, append=append)
     return len(specs), skipped

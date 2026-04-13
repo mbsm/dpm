@@ -1,4 +1,4 @@
-"""Main GUI window for the DPM controller."""
+"""Main GUI window for the DPM supervisor."""
 
 import logging
 import os
@@ -31,14 +31,12 @@ from .process_output import ProcessOutput
 
 logger = logging.getLogger(__name__)
 
-# status mapping from single-letter state codes
+# Status mapping from single-letter state codes (matches node.STATE_DISPLAY)
 STATE_NAME_MAP = {
     "T": "Ready",
     "R": "Running",
-    "S": "Stopped",
     "F": "Failed",
     "K": "Killed",
-    "E": "Exited",
 }
 
 HOST_OFFLINE_THRESHOLD_SEC = 5
@@ -121,9 +119,9 @@ class HostCard(QFrame):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller, *args, **kwargs):
+    def __init__(self, supervisor, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.controller = controller
+        self.supervisor = supervisor
         # Keep modeless output windows alive (one per proc)
         self.output_windows = {}
 
@@ -169,14 +167,14 @@ class MainWindow(QMainWindow):
         lcm_url_action.triggered.connect(self._change_lcm_url)
         settings_menu.addAction(lcm_url_action)
 
-        node_menu = menu_bar.addMenu("&Node")
-        spawn_action = QAction("&Spawn Local Node", self)
-        spawn_action.triggered.connect(self.spawn_local_node)
-        node_menu.addAction(spawn_action)
+        agent_menu = menu_bar.addMenu("&Agent")
+        spawn_action = QAction("&Spawn Local Agent", self)
+        spawn_action.triggered.connect(self.spawn_local_agent)
+        agent_menu.addAction(spawn_action)
 
-        stop_action = QAction("S&top Local Node", self)
-        stop_action.triggered.connect(self.stop_local_node)
-        node_menu.addAction(stop_action)
+        stop_action = QAction("S&top Local Agent", self)
+        stop_action.triggered.connect(self.stop_local_agent)
+        agent_menu.addAction(stop_action)
 
         # Process menu
         process_menu = menu_bar.addMenu("&Process")
@@ -316,7 +314,7 @@ class MainWindow(QMainWindow):
             return
         try:
             written, skipped = save_all_process_specs(
-                fname, self.controller, append=False
+                fname, self.supervisor, append=False
             )
             QMessageBox.information(
                 self, "Success", f"Saved {written} specs, skipped {skipped}."
@@ -332,7 +330,7 @@ class MainWindow(QMainWindow):
         if not fname:
             return
         try:
-            created, errors = load_and_create(fname, self.controller)
+            created, errors = load_and_create(fname, self.supervisor)
 
             summary = f"File: {fname}\nCreated: {len(created)}\nErrors: {len(errors)}"
 
@@ -377,7 +375,7 @@ class MainWindow(QMainWindow):
         # Update or create cards without clearing to avoid flicker
         now = time.time()
         seen_hosts = set()
-        for host, info in self.controller.hosts.items():
+        for host, info in self.supervisor.hosts.items():
             ts_us = getattr(info, "timestamp", 0) or 0
             try:
                 age = now - (float(ts_us) * 1e-6)
@@ -473,9 +471,9 @@ class MainWindow(QMainWindow):
             if isinstance(d, dict) and d.get("type") == "proc":
                 sel_proc_name = d.get("name")
 
-        # Build group -> procs mapping from controller snapshot
+        # Build group -> procs mapping from supervisor snapshot
         groups = {}
-        for p in self.controller.procs.values():
+        for p in self.supervisor.procs.values():
             groups.setdefault(getattr(p, "group", None) or "(ungrouped)", []).append(p)
 
         seen_groups = set()
@@ -635,23 +633,6 @@ class MainWindow(QMainWindow):
                     self.hosts_list.setCurrentItem(it)
                     break
 
-    def start_process(self):
-        self._start_proc_direct(self._selected_proc(), self._selected_host())
-
-    def stop_process(self):
-        self._stop_proc_direct(self._selected_proc(), self._selected_host())
-
-    def edit_process(self):
-        self._edit_proc_direct(self._selected_proc())
-
-    def view_output(self):
-        proc_name = self._selected_proc()
-        if not proc_name:
-            QMessageBox.warning(self, "Warning", "No process selected.")
-            return
-        self._open_output_window(proc_name)
-
-    # Context menu helper
     def _view_output_direct(self, proc_name):
         if not proc_name:
             QMessageBox.warning(self, "Warning", "No process selected.")
@@ -673,9 +654,9 @@ class MainWindow(QMainWindow):
         # Fetch full current buffer for this proc without copying whole dicts
         initial_text = ""
         initial_gen = 0
-        if hasattr(self.controller, "get_proc_output_delta"):
+        if hasattr(self.supervisor, "get_proc_output_delta"):
             initial_gen, initial_text, _reset, _cur_len = (
-                self.controller.get_proc_output_delta(
+                self.supervisor.get_proc_output_delta(
                     proc_name, last_gen=-1, last_len=0
                 )
             )
@@ -684,10 +665,11 @@ class MainWindow(QMainWindow):
             proc_name,
             initial_text=initial_text,
             initial_gen=initial_gen,
-            controller=self.controller,
+            supervisor=self.supervisor,
             parent=self,
         )
         self.output_windows[proc_name] = dlg
+        dlg.destroyed.connect(lambda _=None, n=proc_name: self.output_windows.pop(n, None))
         dlg.show()
 
     # --- Context-menu direct helpers ---
@@ -700,7 +682,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
         try:
-            self.controller.start_proc(proc_name, host)
+            self.supervisor.start_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
@@ -716,19 +698,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
         try:
-            self.controller.stop_proc(proc_name, host)
+            self.supervisor.stop_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
                 self, "Error", f"Failed to stop {proc_name}@{host}: {e}"
             )
 
-    def _edit_proc_direct(self, proc_name: str):
+    def _edit_proc_direct(self, proc_name: str, host_name: str = None):
         if not proc_name:
             QMessageBox.warning(self, "Warning", "No process selected.")
             return
-        proc = self.controller.procs.get(proc_name)
-        dlg = ProcessDialog(self.controller, proc)
+        # Find the proc object; procs dict is keyed by (hostname, name)
+        proc = None
+        for p in self.supervisor.procs.values():
+            if p.name == proc_name and (not host_name or getattr(p, "hostname", "") == host_name):
+                proc = p
+                break
+        dlg = ProcessDialog(self.supervisor, proc)
         if dlg.exec_():
             self.refresh_processes_in_place()
 
@@ -746,13 +733,13 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            self.controller.del_proc(proc_name, host)
+            self.supervisor.del_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
 
     def new_process(self):
-        dlg = ProcessDialog(self.controller, None)  # creation mode
+        dlg = ProcessDialog(self.supervisor, None)  # creation mode
         if dlg.exec_():
             self.refresh_processes_in_place()
 
@@ -760,7 +747,7 @@ class MainWindow(QMainWindow):
         self._delete_proc_direct(self._selected_proc(), self._selected_host())
 
     def _change_lcm_url(self):
-        current = getattr(self.controller, "lc_url", "")
+        current = getattr(self.supervisor, "lc_url", "")
         new_url, ok = QInputDialog.getText(
             self,
             "Change LCM URL",
@@ -771,42 +758,35 @@ class MainWindow(QMainWindow):
             return
         new_url = new_url.strip()
         try:
-            self.controller.reconnect_lcm(new_url)
+            self.supervisor.reconnect_lcm(new_url)
             QMessageBox.information(
                 self, "LCM URL", f"LCM URL updated to:\n{new_url}"
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to change LCM URL:\n{e}")
 
-    def spawn_local_node(self):
+    def spawn_local_agent(self):
         try:
-            from dpm.utils.local_node import spawn_local_node
+            from dpm.utils.local_agent import spawn_local_agent
 
-            pid, logfile = spawn_local_node()
+            pid, logfile = spawn_local_agent()
             QMessageBox.information(
-                self, "Node", f"Spawned node PID {pid} -> {logfile}"
+                self, "Agent", f"Spawned agent PID {pid} -> {logfile}"
             )
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to spawn local node: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to spawn local agent: {e}")
 
-    def stop_local_node(self):
+    def stop_local_agent(self):
         try:
-            from dpm.utils.local_node import stop_last_spawned_node
+            from dpm.utils.local_agent import stop_last_spawned_agent
 
-            terminated = stop_last_spawned_node()
+            terminated = stop_last_spawned_agent()
             if terminated:
-                QMessageBox.information(self, "Node", "Stopped local node.")
+                QMessageBox.information(self, "Agent", "Stopped local agent.")
             else:
-                QMessageBox.information(self, "Node", "Stopped local node (killed).")
+                QMessageBox.information(self, "Agent", "Stopped local agent (killed).")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to stop local node: {e}")
-
-    def show_process_output(self):
-        # Avoid item.text(0) (can be group label); always use the stored UserRole data
-        proc_name = self._selected_proc()
-        if not proc_name:
-            return
-        self._open_output_window(proc_name)
+            QMessageBox.critical(self, "Error", f"Failed to stop local agent: {e}")
 
     # --- Selection helpers ---
     def _selected_host(self):
@@ -827,24 +807,10 @@ class MainWindow(QMainWindow):
         if not procs:
             return ("Ready", 0.0, 0.0, "No", "")
 
-        # Group Status with TUI-like rules:
-        # - Running if ALL are running
-        # - Ready   if ALL are ready
-        # - Mixed   otherwise
-        def _is_running(p):
-            st_char = getattr(p, "state", None)
-            if isinstance(st_char, str) and st_char.upper() == "R":
-                return True
-            return self._proc_status(p).lower() == "running"
-
-        def _is_ready(p):
-            st_char = getattr(p, "state", None)
-            if isinstance(st_char, str) and st_char.upper() == "T":
-                return True
-            return self._proc_status(p).lower() == "ready"
-
-        all_running = all(_is_running(p) for p in procs)
-        all_ready = all(_is_ready(p) for p in procs)
+        # Group Status: Running if ALL running, Ready if ALL ready, else Mixed
+        statuses = [self._proc_status(p).lower() for p in procs]
+        all_running = all(s == "running" for s in statuses)
+        all_ready = all(s == "ready" for s in statuses)
         g_status = "Running" if all_running else ("Ready" if all_ready else "Mixed")
 
         # CPU: average of available cpu fractions (0..1)
@@ -888,58 +854,25 @@ class MainWindow(QMainWindow):
 
     # --- Per-process helpers used by the table ---
     def _proc_status(self, proc) -> str:
-        """Best-effort status string from the process object."""
-        try:
-            s = getattr(proc, "status", None) or getattr(proc, "state", None) or ""
-            if isinstance(s, str):
-                s = s.strip()
-                if len(s) == 1:
-                    mapped = STATE_NAME_MAP.get(s.upper())
-                    if mapped:
-                        return mapped
-                if s:
-                    return s.capitalize()
-            running = getattr(proc, "running", None)
-            if isinstance(running, bool):
-                return "Running" if running else "Stopped"
-        except (AttributeError, TypeError, ValueError) as e:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Status parse failed: %s", e)
-        return "Ready"
+        """Derive display status from the state code (single source of truth)."""
+        state = getattr(proc, "state", "") or ""
+        return STATE_NAME_MAP.get(state.strip().upper(), "Ready")
 
     def _mem_mb(self, proc) -> float:
-        """Return memory usage in MB. Tries various common fields."""
+        """Return memory usage in MB (mem_rss is published in kB by the node)."""
         try:
-            v = getattr(proc, "mem_rss", None)  # kB from LCM
-            if v is not None:
-                return float(v) / 1024.0
-            for name in ("mem_mb", "memory_mb", "rss_mb"):
-                v = getattr(proc, name, None)
-                if v is not None:
-                    return float(v)
-            for name in ("mem_bytes", "memory_bytes", "rss_bytes", "rss"):
-                v = getattr(proc, name, None)
-                if v is not None:
-                    return float(v) / (1024.0 * 1024.0)
-            v = getattr(proc, "mem", None)
-            if v is not None:
-                v = float(v)
-                return v / (1024.0 * 1024.0) if v > 4096.0 else v
-        except (AttributeError, TypeError, ValueError) as e:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug("Memory parse failed: %s", e)
-        return 0.0
+            return float(getattr(proc, "mem_rss", 0) or 0) / 1024.0
+        except (TypeError, ValueError):
+            return 0.0
 
     def _status_color(self, status_str: str) -> QColor:
         s = (status_str or "").lower()
         if s == "running":
             return COLOR_GREEN
-        if s in ("stopped", "failed", "killed", "error"):
+        if s in ("failed", "killed"):
             return COLOR_RED
         if s == "mixed":
             return COLOR_YELLOW
-        if s in ("ready",) or s.startswith("exited"):
-            return COLOR_GRAY
         return COLOR_GRAY
 
     def _auto_color(self, auto_str: str) -> QColor:
@@ -986,7 +919,7 @@ class MainWindow(QMainWindow):
             menu.addAction(act_stop)
 
             act_edit = QAction("Edit", self)
-            act_edit.triggered.connect(lambda: self._edit_proc_direct(proc_name))
+            act_edit.triggered.connect(lambda: self._edit_proc_direct(proc_name, host_name))
             menu.addAction(act_edit)
 
             act_view = QAction("View Output", self)
@@ -1020,42 +953,33 @@ class MainWindow(QMainWindow):
         try:
             return [
                 p
-                for p in self.controller.procs.values()
+                for p in self.supervisor.procs.values()
                 if (getattr(p, "group", "") or "(ungrouped)") == group_name
             ]
         except (AttributeError, TypeError):
             return []
 
-    def _execute_group_action(self, group_name: str, action_fn, label: str) -> None:
+    def _start_group(self, group_name: str):
         procs = self._procs_in_group(group_name)
         if not procs:
-            QMessageBox.information(
-                self, label, f"No processes found in group '{group_name}'."
-            )
+            QMessageBox.information(self, "Start All", f"No processes found in group '{group_name}'.")
             return
-        selected_host = self._selected_host()
-        failures = []
-        missing_host = []
-        for p in procs:
-            host = getattr(p, "hostname", "") or selected_host
-            if not host:
-                missing_host.append(p.name)
-                continue
-            try:
-                action_fn(p.name, host)
-            except Exception as e:
-                failures.append(f"{p.name}@{host}: {e}")
+        hosts = {getattr(p, "hostname", "") or "" for p in procs}
+        for host in hosts:
+            if host:
+                self.supervisor.start_group(group_name, host)
         self.refresh_processes_in_place()
-        if missing_host:
-            QMessageBox.warning(self, label, f"No host for: {', '.join(missing_host)}")
-        if failures:
-            QMessageBox.critical(self, label, "Some failed:\n" + "\n".join(failures))
-
-    def _start_group(self, group_name: str):
-        self._execute_group_action(group_name, self.controller.start_proc, "Start All")
 
     def _stop_group(self, group_name: str):
-        self._execute_group_action(group_name, self.controller.stop_proc, "Stop All")
+        procs = self._procs_in_group(group_name)
+        if not procs:
+            QMessageBox.information(self, "Stop All", f"No processes found in group '{group_name}'.")
+            return
+        hosts = {getattr(p, "hostname", "") or "" for p in procs}
+        for host in hosts:
+            if host:
+                self.supervisor.stop_group(group_name, host)
+        self.refresh_processes_in_place()
 
     def _view_group_outputs(self, group_name: str):
         procs = self._procs_in_group(group_name)

@@ -8,11 +8,15 @@ proc_outputs_channel: "DPM/proc_outputs"
 host_procs_channel: "DPM/host_procs"
 
 # Timer Intervals in s
-monitor_interval: 1
-output_interval: 1
-host_status_interval: 1
-procs_status_interval: 1
+monitor_interval: 5
+output_interval: 5
+host_status_interval: 5
+procs_status_interval: 5
 report_threshold: 5
 
 #timeout in s for stopping a process
 stop_timeout: 2
+
+# Process registry persistence (agent only)
+# persist_processes: false
+# persist_path: /var/lib/dpm/processes.yaml

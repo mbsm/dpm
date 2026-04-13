@@ -8,12 +8,12 @@ This project is inspired by `libbot procman` and is developed primarily for lear
 
 DPM has two primary roles:
 
-- **Agent (Node)**: runs on each Linux host (typically as a `systemd` service). It starts/stops/monitors local processes and reports state/output back to the controller.
-- **Controller (GUI)**: runs on an operator machine (or one host in the cluster). It sends commands to agents and displays host/process state and output.
+- **Agent**: runs on each Linux host (typically as a `systemd` service via `dpm-agent.service`). It starts/stops/monitors local processes and reports state/output back to the supervisor.
+- **Supervisor + GUI**: runs on an operator machine (or one host in the cluster). It sends commands to agents and displays host/process state and output.
 
 ## 2. Components
 
-### 2.1 Agent (dpm node)
+### 2.1 Agent (dpm-agent)
 Responsibilities:
 - Maintain a local registry of managed processes (specs + runtime state).
 - Execute actions: create, start, stop, delete.
@@ -25,9 +25,9 @@ Responsibilities:
 
 Runtime environment:
 - Runs as a low-privilege service user.
-- Managed by systemd (`dpm-node.service`).
+- Managed by systemd (`dpm-agent.service`).
 
-### 2.2 Controller (GUI)
+### 2.2 Supervisor + GUI
 Responsibilities:
 - Discover and list active hosts (agents publishing).
 - Show processes per host and their states.
@@ -50,81 +50,104 @@ Current messages (LCM types):
 Current behavior:
 - GUI infers command success by observing subsequent `host_procs_t` updates and/or output.
 
-## 4. Node feature roadmap (non-protocol)
+## 4. Process State Machine
 
-### 4.1 Realtime / performance controls (optional)
+The `state` field is the single source of truth for process lifecycle. The redundant `status` string field has been removed; display labels are derived from state codes via `STATE_DISPLAY`.
+
+### 4.1 States
+
+| Code | Name    | Meaning |
+|------|---------|---------|
+| `T`  | Ready   | Created but not started, or cleanly stopped (exit 0 / graceful SIGTERM) |
+| `R`  | Running | Process is alive |
+| `F`  | Failed  | Non-zero exit, or failed to start |
+| `K`  | Killed  | Force-killed (SIGKILL after stop timeout) |
+
+### 4.2 Transitions
+
+```
+create_process  → READY
+start_process   → RUNNING (success) or FAILED (Popen/exec error)
+stop_process    → READY (graceful) or KILLED (SIGKILL escalation)
+monitor: exit 0 → READY
+monitor: exit≠0 → FAILED → auto_restart (with backoff) → RUNNING
+```
+
+### 4.3 Auto-restart with backoff
+
+Processes with `auto_restart=True` are restarted only on FAILED state (non-zero exit). Exponential backoff prevents tight restart loops: 1s, 2s, 4s, 8s, ... capped at 60s. The counter resets on successful start.
+
+### 4.4 Realtime priority
+
+Per-process `realtime` flag uses `SCHED_FIFO` with configurable priority via `rt_priority` in `dpm.yaml` (default: 40). Requires `CAP_SYS_NICE`.
+
+## 5. Node feature roadmap (non-protocol)
+
+### 5.1 Realtime / performance controls (future)
 Potential per-process spec fields:
 - `cpu_affinity`: list of cores (pin process)
-- `rt_policy`: FIFO/RR
-- `rt_priority`: 1..99
+- `rt_policy`: FIFO/RR (currently hard-coded to FIFO)
 - `nice`: -20..19
+- Per-process `rt_priority` override (currently global config)
 
 Implementation options:
 - `os.sched_setaffinity(pid, ...)`
-- `os.sched_setscheduler(pid, policy, priority)` (requires `CAP_SYS_NICE`)
-- cgroups (`cpuset`, `cpu`) for stronger containment (recommended if multiple child processes/forks)
+- cgroups (`cpuset`, `cpu`) for stronger containment
 
-### 4.2 Resource limits
+### 5.2 Resource limits
 - memory limit, cpu quota (cgroups)
 - file descriptor limits
 - environment variable allowlist
 
-### 4.3 Health checks and restart policy
+### 5.3 Health checks
 - readiness checks (port open / command exit / custom probe)
-- restart policy: backoff, max retries, cooldown timers
 - dependency ordering by group
 
-## 5. Packaging plan: move from install.sh to .deb packages
+## 6. Packaging
 
-### 5.1 Target packages
-Produce Debian packages managed by `apt`:
+The project uses `pyproject.toml` (PEP 621) for metadata, dependencies, and entry points. `setup.py` is kept as a thin shim for backward compatibility.
 
-- **`dpm-agent`** (or `dpm-node`):
-  - installs the agent runtime
-  - installs default config to `/etc/dpm/dpm.yaml` (conffile)
-  - installs systemd unit: `dpm-node.service`
-  - creates service user (if needed)
-  - enables + starts the service (postinst)
+One source package (`dpm`) produces three binary `.deb` packages:
 
-- **`dpm-controller`** (or renamed GUI package, e.g. `dpm-gui`):
-  - installs GUI application + desktop integration 
-  - depends on PyQt5 and runtime deps
-  
+| Package | Purpose | Key files installed |
+|---------|---------|---------------------|
+| **`python3-dpm`** | Python library + all entry points | `/usr/bin/dpm-agent`, `/usr/bin/dpm`, `/usr/bin/dpm-gui`, `/usr/lib/python3/dist-packages/dpm/`, `/usr/lib/python3/dist-packages/dpm_msgs/` |
+| **`dpm-agent`** | Agent systemd service + config | `/lib/systemd/system/dpm-agent.service`, `/etc/dpm/dpm.yaml`, `/etc/security/limits.d/99-dpm-realtime.conf` |
+| **`dpm-tools`** | GUI desktop integration | `/usr/share/applications/dpm-gui.desktop`, `/usr/share/icons/hicolor/256x256/apps/dpm-gui.png` |
 
-Recommended approach: **one source package** (`dpm`) producing **multiple binary packages** (`dpm-agent`, `dpm-controller`).
+Both `dpm-agent` and `dpm-tools` depend on `python3-dpm`, which is auto-installed by `apt`.
 
-### 5.2 Debian packaging approach (recommended)
-Use standard Debian tooling:
-- `debian/control` with two binary stanzas
+### What happens on install
+
+**`apt install ./dpm-agent_*.deb`** triggers `dpm-agent.postinst` which:
+
+1. Creates system user `dpm` (no home, no shell) via `adduser --system`
+2. Adds `dpm` to `video`, `render`, `plugdev` groups (GPU and USB camera access)
+3. Creates `/var/log/dpm/` owned by `dpm:dpm`
+4. Runs `systemctl daemon-reload`
+5. Runs `systemctl enable dpm-agent.service`
+6. Runs `systemctl start dpm-agent.service`
+
+**`apt remove dpm-agent`** triggers `dpm-agent.prerm` which stops and disables the service.
+
+**`apt purge dpm-agent`** triggers `dpm-agent.postrm` which also removes `/etc/dpm/` and `/var/log/dpm/`.
+
+### Build tooling
+
+- `debian/control` with three binary stanzas (`python3-dpm`, `dpm-agent`, `dpm-tools`)
 - `debian/rules` using `dh` + `pybuild` (dh-python)
-- `debian/*.install` to place files into:
-  - python package: `/usr/lib/python3/dist-packages/`
-  - scripts: `/usr/bin/`
-  - config: `/etc/dpm/dpm.yaml`
-  - systemd: `/lib/systemd/system/dpm-node.service`
+- `debian/*.install` manifests for file placement
+- `debian/dpm-agent.postinst` / `.prerm` / `.postrm` — maintainer scripts for service lifecycle
+- LCM Python bindings ship pre-generated in `src/dpm_msgs/` (no build-time `lcm-gen` dependency)
 
-Service management:
-- `postinst`: create user, `systemctl daemon-reload`, enable/start
-- `prerm/postrm`: stop/disable on removal (policy-dependent)
+### Acceptance criteria
 
-Generated LCM Python bindings:
-- Option A (recommended): ship generated `src/dpm_msgs/*.py` as part of the package (no build-time LCM dependency).
-- Option B: generate at build time (requires `lcm-gen` in Build-Depends).
+- `apt install dpm-agent` results in a running service (`systemctl status dpm-agent`)
+- `apt install dpm-tools` provides `dpm` CLI; GUI works if `python3-pyqt5` is installed
+- `apt upgrade` preserves `/etc/dpm/dpm.yaml` edits (conffile behavior)
+- `apt remove` stops services; `apt purge` removes config and logs
 
-### 5.3 Migration from install.sh
-- Keep `install.sh` only for dev/testing or remove it once `.deb` packaging is stable.
-- Encode existing install behavior into:
-  - Debian conffiles
-  - `postinst` scripts
-  - systemd unit
-
-### 5.4 Acceptance criteria
-- `apt install dpm-agent` results in a running service (`systemctl status dpm-node`).
-- `apt install dpm-controller` provides a runnable GUI entry point.
-- `apt upgrade` preserves `/etc/dpm/dpm.yaml` changes (conffile behavior).
-- `apt remove` stops services; `apt purge` removes config (if desired).
-
-## 6. Security (future enhancement)
+## 7. Security (future enhancement)
 
 DPM’s current threat model is a trusted cluster, but a future enhancement can add message confidentiality/integrity while staying on LCM:
 
@@ -140,15 +163,15 @@ Receiver:
 
 This can be introduced without changing the internal high-level architecture.
 
-## 7. Protocol improvement plan (vNext): “ACK + minimal info in one message”
+## 8. Protocol improvement plan (vNext): “ACK + minimal info in one message”
 
-### 7.1 Goals
+### 8.1 Goals
 - Provide immediate feedback to the GUI after commands.
 - Reduce GUI-side inference and “did it happen yet?” ambiguity.
 - Keep the payload **minimal** while still allowing correct UI updates.
 - Preserve periodic snapshots for eventual consistency.
 
-### 7.2 Proposed additions/changes
+### 8.2 Proposed additions/changes
 
 #### A) Add command identity to requests
 Extend (or replace) command messages to include:
@@ -186,7 +209,7 @@ GUI logic becomes:
 - Update UI instantly on `proc_event_t`.
 - Periodically reconcile against `host_procs_t` snapshots.
 
-### 7.3 Bandwidth minimization guidelines
+### 8.3 Bandwidth minimization guidelines
 - Limit `proc_event_t.message` length (e.g., <= 256 bytes).
 - Do **not** embed full stdout/stderr in ACK messages.
 - Keep `proc_output_t` separate and rate-limited (or provide on-demand output later).

@@ -1,0 +1,33 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create the dpm system user if it doesn't exist
+        if ! getent passwd dpm >/dev/null 2>&1; then
+            adduser --system --group --no-create-home --quiet dpm
+        fi
+
+        # Grant device access groups (GPU, USB cameras)
+        for grp in video render plugdev; do
+            if getent group "$grp" >/dev/null 2>&1; then
+                usermod -a -G "$grp" dpm 2>/dev/null || true
+            fi
+        done
+
+        # Create log directory
+        mkdir -p /var/log/dpm
+        chown dpm:dpm /var/log/dpm
+
+        # Enable and start the service
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable dpm-agent.service
+            systemctl start dpm-agent.service || true
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

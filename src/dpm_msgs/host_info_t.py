@@ -10,11 +10,11 @@ except ImportError:
 import struct
 
 class host_info_t(object):
-    __slots__ = ["timestamp", "hostname", "ip", "cpus", "cpu_usage", "mem_total", "mem_used", "mem_free", "mem_usage", "network_sent", "network_recv", "uptime"]
+    __slots__ = ["timestamp", "hostname", "ip", "cpus", "cpu_usage", "mem_total", "mem_used", "mem_free", "mem_usage", "network_sent", "network_recv", "uptime", "report_interval", "persist"]
 
-    __typenames__ = ["int64_t", "string", "string", "int32_t", "float", "float", "float", "float", "float", "float", "float", "int64_t"]
+    __typenames__ = ["int64_t", "string", "string", "int32_t", "float", "float", "float", "float", "float", "float", "float", "int64_t", "float", "boolean"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
         self.timestamp = 0
@@ -29,6 +29,8 @@ class host_info_t(object):
         self.network_sent = 0.0
         self.network_recv = 0.0
         self.uptime = 0
+        self.report_interval = 0.0
+        self.persist = False
 
     def encode(self):
         buf = BytesIO()
@@ -46,7 +48,7 @@ class host_info_t(object):
         buf.write(struct.pack('>I', len(__ip_encoded)+1))
         buf.write(__ip_encoded)
         buf.write(b"\0")
-        buf.write(struct.pack(">ifffffffq", self.cpus, self.cpu_usage, self.mem_total, self.mem_used, self.mem_free, self.mem_usage, self.network_sent, self.network_recv, self.uptime))
+        buf.write(struct.pack(">ifffffffqfb", self.cpus, self.cpu_usage, self.mem_total, self.mem_used, self.mem_free, self.mem_usage, self.network_sent, self.network_recv, self.uptime, self.report_interval, self.persist))
 
     def decode(data):
         if hasattr(data, 'read'):
@@ -65,13 +67,14 @@ class host_info_t(object):
         self.hostname = buf.read(__hostname_len)[:-1].decode('utf-8', 'replace')
         __ip_len = struct.unpack('>I', buf.read(4))[0]
         self.ip = buf.read(__ip_len)[:-1].decode('utf-8', 'replace')
-        self.cpus, self.cpu_usage, self.mem_total, self.mem_used, self.mem_free, self.mem_usage, self.network_sent, self.network_recv, self.uptime = struct.unpack(">ifffffffq", buf.read(40))
+        self.cpus, self.cpu_usage, self.mem_total, self.mem_used, self.mem_free, self.mem_usage, self.network_sent, self.network_recv, self.uptime, self.report_interval = struct.unpack(">ifffffffqf", buf.read(44))
+        self.persist = bool(struct.unpack('b', buf.read(1))[0])
         return self
     _decode_one = staticmethod(_decode_one)
 
     def _get_hash_recursive(parents):
         if host_info_t in parents: return 0
-        tmphash = (0xe14c8b7824504d38) & 0xffffffffffffffff
+        tmphash = (0x9c07b917bc38992d) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

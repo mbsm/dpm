@@ -30,7 +30,7 @@ def _make_proc_ns(name="p1", hostname="h1", **kwargs):
     return types.SimpleNamespace(**defaults)
 
 
-class MockController:
+class MockSupervisor:
     def __init__(self, proc_list=None, create_raises=None):
         self._procs = {p.name: p for p in (proc_list or [])}
         self._created = []
@@ -155,7 +155,7 @@ def test_load_and_create_all_valid(tmp_path):
     path = tmp_path / "s.yaml"
     specs = [_make_spec("a", "host1"), _make_spec("b", "host2")]
     path.write_text(yaml.dump(specs))
-    ctrl = MockController()
+    ctrl = MockSupervisor()
     created, errors = load_and_create(str(path), ctrl)
     assert set(created) == {"a@host1", "b@host2"}
     assert errors == []
@@ -166,7 +166,7 @@ def test_load_and_create_partial_success_missing_field(tmp_path):
     good = _make_spec("good", "h1")
     bad = {"name": "bad"}  # missing host and exec_command
     path.write_text(yaml.dump([good, bad]))
-    ctrl = MockController()
+    ctrl = MockSupervisor()
     created, errors = load_and_create(str(path), ctrl)
     assert len(created) == 1
     assert "good@h1" in created
@@ -174,10 +174,10 @@ def test_load_and_create_partial_success_missing_field(tmp_path):
     assert errors[0][0]["name"] == "bad"
 
 
-def test_load_and_create_controller_exception_captured(tmp_path):
+def test_load_and_create_supervisor_exception_captured(tmp_path):
     path = tmp_path / "s.yaml"
     path.write_text(yaml.dump([_make_spec()]))
-    ctrl = MockController(create_raises=RuntimeError("LCM down"))
+    ctrl = MockSupervisor(create_raises=RuntimeError("LCM down"))
     created, errors = load_and_create(str(path), ctrl)
     assert created == []
     assert len(errors) == 1
@@ -191,7 +191,7 @@ def test_load_and_create_controller_exception_captured(tmp_path):
 def test_save_all_writes_all_valid_procs(tmp_path):
     path = str(tmp_path / "all.yaml")
     procs = [_make_proc_ns("a", "h1"), _make_proc_ns("b", "h2")]
-    ctrl = MockController(proc_list=procs)
+    ctrl = MockSupervisor(proc_list=procs)
     written, skipped = save_all_process_specs(path, ctrl)
     assert written == 2
     assert skipped == 0
@@ -206,7 +206,7 @@ def test_save_all_skips_procs_missing_required_fields(tmp_path):
     good = _make_proc_ns("good", "h1")
     bad = types.SimpleNamespace(name="bad", hostname="", exec_command="",
                                 group="", auto_restart=False, realtime=False)
-    ctrl = MockController(proc_list=[good, bad])
+    ctrl = MockSupervisor(proc_list=[good, bad])
     written, skipped = save_all_process_specs(path, ctrl)
     assert written == 1
     assert skipped == 1
@@ -217,7 +217,7 @@ def test_save_all_append_merges_with_existing(tmp_path):
     existing = [_make_spec("existing")]
     with open(path, "w") as f:
         yaml.safe_dump(existing, f)
-    ctrl = MockController(proc_list=[_make_proc_ns("new", "h1")])
+    ctrl = MockSupervisor(proc_list=[_make_proc_ns("new", "h1")])
     save_all_process_specs(path, ctrl, append=True)
     data = yaml.safe_load(open(path))
     names = {d["name"] for d in data}
@@ -225,15 +225,15 @@ def test_save_all_append_merges_with_existing(tmp_path):
     assert "new" in names
 
 
-def test_save_all_controller_procs_attribute_error(tmp_path):
-    """If controller.procs raises AttributeError, result is (0, 0) with empty file."""
+def test_save_all_supervisor_procs_attribute_error(tmp_path):
+    """If supervisor.procs raises AttributeError, result is (0, 0) with empty file."""
     path = str(tmp_path / "all.yaml")
 
-    class BrokenController:
+    class BrokenSupervisor:
         @property
         def procs(self):
             raise AttributeError("no procs")
 
-    written, skipped = save_all_process_specs(path, BrokenController())
+    written, skipped = save_all_process_specs(path, BrokenSupervisor())
     assert written == 0
     assert skipped == 0

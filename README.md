@@ -3,23 +3,151 @@
 DPM is a lightweight distributed process manager for trusted Linux clusters.
 It uses LCM multicast for control and telemetry.
 
-> Project note: DPM is inspired by `libbot procman` and is built primarily as a learning project.
-
-## What it does
-
-- Runs an agent per host to manage local processes.
-- Provides a controller + GUI for operators.
-- Streams host telemetry, process snapshots, and process output.
+> Inspired by `libbot procman`, built primarily as a learning project.
 
 ## Architecture
 
-- Node/Agent: `src/dpm/node/node.py`
-- Controller: `src/dpm/controller/controller.py`
-- GUI entrypoint: `src/dpm/gui/main.py`
-- LCM schemas: `lcm/*.lcm`
-- Generated message bindings: `src/dpm_msgs/*.py`
+DPM has two core components connected over LCM multicast:
 
-Detailed architecture notes: `docs/architecture.md`
+```
+ ┌─────────────────────────────────────────────────────────┐
+ │                      LCM Multicast                      │
+ └────────┬──────────────────────────────────┬─────────────┘
+          │                                  │
+   ┌──────▼──────┐                    ┌──────▼──────┐
+   │    Agent     │  (one per host)   │  Supervisor │  (one instance)
+   │              │                   │             │
+   │ - manages    │   host_info_t ──► │ - aggregates│
+   │   local      │   host_procs_t ─► │   telemetry │
+   │   processes  │   proc_output_t ► │ - sends     │
+   │ - publishes  │                   │   commands  │
+   │   telemetry  │ ◄── command_t ─── │             │
+   └──────────────┘                   └──────┬──────┘
+                                             │
+                                      ┌──────▼──────┐
+                                      │     UI      │
+                                      │  (PyQt GUI) │
+                                      │             │
+                                      │ - displays  │
+                                      │   hosts &   │
+                                      │   processes │
+                                      │ - operator  │
+                                      │   controls  │
+                                      └─────────────┘
+```
+
+### Agent (`dpm-agent`)
+
+Runs on each host in the cluster, typically as a systemd service. Responsibilities:
+
+- Manage local processes: create, start, stop, delete
+- Monitor process liveness and exit status
+- Publish host telemetry (CPU, memory, network) and process state over LCM
+- Stream process stdout/stderr output to the supervisor
+- Auto-restart failed processes with exponential backoff
+
+Source: `src/dpm/agent/agent.py`
+
+### Supervisor
+
+The supervisor is a library that any user interface can use to interact with the system. It:
+
+- Subscribes to agent telemetry over LCM (host info, process snapshots, output)
+- Sends commands to agents (create/start/stop/delete processes and groups)
+- Maintains thread-safe state snapshots for the UI layer
+- Handles LCM reconnection with backoff
+
+Source: `src/dpm/supervisor/supervisor.py`
+
+### CLI (`dpm`)
+
+A command-line interface for scripting, headless servers, and automation. Uses the `@host` syntax:
+
+```bash
+dpm status                              # all hosts + processes
+dpm status @jet1                        # filter to one host
+dpm hosts                               # hosts only
+dpm start camera@jet1                   # start a process
+dpm stop camera@jet1                    # stop a process
+dpm restart camera@jet1                 # stop + start
+dpm create camera@jet1 --cmd "cam-node" -g perception --auto-restart
+dpm delete camera@jet1                  # stop + remove
+dpm start-group perception@jet1         # batch start
+dpm stop-group perception@jet1          # batch stop
+dpm load system.yaml                    # create processes from spec
+dpm save snapshot.yaml                  # save current state
+dpm start-all                           # start every process
+dpm stop-all                            # stop every process
+dpm logs camera@jet1                    # stream output (Ctrl+C)
+```
+
+No PyQt5 dependency — works on headless systems.
+
+Source: `src/dpm/cli/`
+
+### GUI (`dpm-gui`)
+
+A PyQt5 desktop application. It uses the Supervisor to:
+
+- Display host cards with online/offline status, CPU, and memory usage
+- Show a process tree grouped by process group
+- Start/stop/edit/delete processes via context menus
+- Stream live process output in modeless windows
+- Save/load process specs as YAML files
+
+The Supervisor is designed to be UI-agnostic — a TUI, CLI, or web frontend could use the same Supervisor class.
+
+Source: `src/dpm/gui/`
+
+### Shared utilities
+
+- `src/dpm/spec_io.py` — YAML-based process spec save/load
+- `src/dpm/utils/config.py` — shared config loading for agent and supervisor
+- `src/dpm/utils/local_agent.py` — spawn/stop a local agent from the GUI
+
+## Process State Machine
+
+Each managed process follows this lifecycle:
+
+```
+                    ┌──────────────────────────────────┐
+                    │                                  │
+  create ──► READY ──► start ──► RUNNING               │
+               ▲                   │                   │
+               │         ┌─────────┼──────────┐        │
+               │         ▼         ▼          ▼        │
+               │     exit(0)   exit(!=0)   SIGKILL     │
+               │         │         │          │        │
+               │         ▼         ▼          ▼        │
+               └──── READY      FAILED     KILLED      │
+                                  │                    │
+                                  └── auto_restart ────┘
+                                      (with backoff)
+```
+
+States:
+- **READY** (`T`): created or cleanly stopped (exit code 0 or graceful SIGTERM)
+- **RUNNING** (`R`): process is alive
+- **FAILED** (`F`): process exited with non-zero code, or failed to start
+- **KILLED** (`K`): process was forcefully killed (SIGKILL after stop timeout)
+
+Auto-restart triggers only on FAILED state with exponential backoff (1s, 2s, 4s, ... capped at 60s).
+
+## Command Actions
+
+- `create_process` — register a process definition (stops existing if running)
+- `start_process` — launch the process (any non-RUNNING state)
+- `stop_process` — SIGTERM → wait → SIGKILL if needed
+- `delete_process` — stop + remove from registry
+- `start_group` / `stop_group` — batch operations by group name
+
+## Message Flow
+
+- Supervisor → Agent: `command_t` on `command_channel` (with seq-based UDP dedup)
+- Agent → Supervisor:
+  - `host_info_t` — host telemetry (CPU, memory, network)
+  - `host_procs_t` — process table snapshot
+  - `proc_output_t` — stdout/stderr chunks
 
 ## Quick Start (development)
 
@@ -28,14 +156,13 @@ Detailed architecture notes: `docs/architecture.md`
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
+pip install -e ".[gui,dev]"
 ```
 
-### 2) Start node
+### 2) Start agent
 
 ```bash
-DPM_CONFIG=./dpm.yaml dpm-node
+DPM_CONFIG=./dpm.yaml dpm-agent
 ```
 
 ### 3) Start GUI
@@ -44,94 +171,176 @@ DPM_CONFIG=./dpm.yaml dpm-node
 DPM_CONFIG=./dpm.yaml dpm-gui
 ```
 
-## Running without install (repo mode)
+### Running without install (repo mode)
 
 ```bash
-PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.node.node
+PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.agent.agent
 PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.gui.main
 ```
 
 ## Configuration
 
-Default config path: `/etc/dpm/dpm.yaml`.
-Override with `DPM_CONFIG`.
+Default config path: `/etc/dpm/dpm.yaml`. Override with `DPM_CONFIG` environment variable.
+A local example is provided in `dpm.yaml`.
 
-Example local config is provided in `dpm.yaml`.
+```yaml
+# LCM transport
+lcm_url: "udpm://239.255.76.67:7667?ttl=1"
 
-## Process actions
+# LCM channel names
+command_channel: "DPM/commands"
+host_info_channel: "DPM/host_info"
+proc_outputs_channel: "DPM/proc_outputs"
+host_procs_channel: "DPM/host_procs"
 
-Supported command actions:
+# Timer intervals (seconds) — how often the agent publishes telemetry
+monitor_interval: 1        # check process liveness
+output_interval: 1         # publish stdout/stderr chunks
+host_status_interval: 1    # publish host CPU/memory/network
+procs_status_interval: 1   # publish process table snapshot
 
-- `create_process`
-- `start_process`
-- `stop_process`
-- `delete_process`
-- `start_group`
-- `stop_group`
+# Timeout for graceful stop before SIGKILL (seconds)
+stop_timeout: 2
 
-## Message flow
+# Realtime scheduling priority for processes with realtime=true (1-99)
+# rt_priority: 40
 
-- GUI -> Node: `command_t` on `command_channel`
-- Node -> GUI:
-  - `host_info_t`
-  - `host_procs_t`
-  - `proc_output_t`
-
-## Install options
-
-`install.sh` now supports component-based installation.
-
-Install both service and GUI (default):
-
-```bash
-sudo ./install.sh install
-# or
-sudo ./install.sh install both
+# Process registry persistence (agent only).
+# When true, process definitions are saved to disk and reloaded on agent restart.
+# Processes with auto_restart=true are started automatically on reload.
+# persist_processes: false
+# persist_path: /var/lib/dpm/processes.yaml
 ```
 
-Install only node service:
+Both the agent and supervisor read the same config file. The agent uses all fields;
+the supervisor only needs the LCM-related fields (URL and channel names).
+
+## Log Paths
+
+| Component | Destination | Notes |
+|-----------|-------------|-------|
+| **Agent (systemd)** | `journalctl -u dpm-agent` | stdout/stderr captured by journald |
+| **Agent (standalone)** | `/var/log/dpm/dpm-agent.log` | Rotating file (10 MB x 5 backups), only when not under systemd |
+| **Agent (dev)** | stdout | Always prints to console |
+| **GUI** | stderr | Standard Python logging to console |
+
+The agent auto-detects systemd (via `INVOCATION_ID` / `JOURNAL_STREAM` env vars) and
+disables file logging when running under journald. Log level is controlled by the
+`DPM_LOG_LEVEL` environment variable (default: `INFO`).
+
+## Testing
 
 ```bash
-sudo ./install.sh install service
+# Unit tests (no network required)
+pytest
+
+# Integration tests (requires live LCM multicast)
+pytest -m integration
 ```
 
-Service target installs only service dependencies (`psutil`, `PyYAML`, `lcm`) and skips GUI packages.
+## Packaging
 
-Install only GUI desktop integration:
+The project uses `pyproject.toml` (PEP 621) for metadata and packaging.
+Install with extras:
 
 ```bash
-sudo ./install.sh install gui
+pip install -e ".[gui]"      # GUI + supervisor
+pip install -e ".[dev]"      # Development (pytest)
+pip install -e ".[gui,dev]"  # Everything
 ```
 
-GUI target installs only GUI dependencies (`PyQt5` + controller deps).
+### Debian packages
 
-Uninstall both (default):
+Build `.deb` packages for production deployment:
 
 ```bash
-sudo ./install.sh uninstall
-# or
-sudo ./install.sh uninstall both
+sudo apt install debhelper dh-python python3-all python3-setuptools
+dpkg-buildpackage -us -uc -b
 ```
 
-Uninstall only service or only GUI:
+This produces three packages:
+
+| Package | Purpose |
+|---------|---------|
+| **`python3-dpm`** | Python library + all binaries (`dpm-agent`, `dpm`, `dpm-gui`) |
+| **`dpm-agent`** | Systemd service, config, RT limits (depends on `python3-dpm`) |
+| **`dpm-tools`** | Desktop entry + icon for GUI (depends on `python3-dpm`) |
+
+Install on each host in the cluster:
 
 ```bash
-sudo ./install.sh uninstall service
-sudo ./install.sh uninstall gui
+# Install agent (auto-installs python3-dpm as dependency)
+sudo apt install ./dpm-agent_0.1.0_all.deb
+
+# Install CLI + GUI on the operator workstation
+sudo apt install ./dpm-tools_0.1.0_all.deb
 ```
 
-## Code inspection workflow
+### What `apt install dpm-agent` does
 
-Static checks (recommended):
+1. Installs `python3-dpm` (Python code + `/usr/bin/dpm-agent`)
+2. Creates system user `dpm` (no home directory, no login shell)
+3. Adds `dpm` user to `video`, `render`, `plugdev` groups (GPU + USB camera access)
+4. Installs config to `/etc/dpm/dpm.yaml` (preserved on upgrade)
+5. Installs systemd unit `dpm-agent.service`
+6. Creates `/var/log/dpm/` owned by `dpm:dpm`
+7. Runs `systemctl daemon-reload && systemctl enable --now dpm-agent`
+
+After install, the agent is running:
 
 ```bash
-source .venv/bin/activate
-PYTHONPATH=src flake8 src/dpm --max-line-length=120
-PYTHONPATH=src pylint src/dpm --disable=import-error
-PYTHONPATH=src bandit -r src/dpm -f txt
+systemctl status dpm-agent           # check service status
+journalctl -u dpm-agent -f           # follow logs
 ```
 
-Review playbook and quality gates: `docs/code-inspection.md`
+### What `apt remove` / `apt purge` does
+
+- `apt remove dpm-agent` — stops and disables the service, removes the unit file
+- `apt purge dpm-agent` — also removes `/etc/dpm/` and `/var/log/dpm/`
+- The `dpm` system user is **not** removed (standard Debian policy)
+
+### File locations after install
+
+| Path | Package | Description |
+|------|---------|-------------|
+| `/usr/bin/dpm-agent` | `python3-dpm` | Agent entry point |
+| `/usr/bin/dpm` | `python3-dpm` | CLI entry point |
+| `/usr/bin/dpm-gui` | `python3-dpm` | GUI entry point |
+| `/usr/lib/python3/dist-packages/dpm/` | `python3-dpm` | Python library |
+| `/usr/lib/python3/dist-packages/dpm_msgs/` | `python3-dpm` | LCM message bindings |
+| `/etc/dpm/dpm.yaml` | `dpm-agent` | Config (conffile — preserved on upgrade) |
+| `/lib/systemd/system/dpm-agent.service` | `dpm-agent` | Systemd unit |
+| `/etc/security/limits.d/99-dpm-realtime.conf` | `dpm-agent` | RT scheduling limits |
+| `/var/log/dpm/` | created by postinst | Log directory (when not using journald) |
+| `/var/lib/dpm/processes.yaml` | created by agent | Persisted process registry (when `persist_processes: true`) |
+| `/usr/share/applications/dpm-gui.desktop` | `dpm-tools` | Desktop menu entry |
+| `/usr/share/icons/hicolor/256x256/apps/dpm-gui.png` | `dpm-tools` | Application icon |
+
+## Project Structure
+
+```
+src/
+  dpm/
+    agent/          # Agent — runs on each host (dpm-agent)
+      agent.py      # Agent class, process state machine, LCM handlers
+    supervisor/     # Supervisor — aggregates telemetry, sends commands
+      supervisor.py # Supervisor class, thread-safe state, LCM pub/sub
+    cli/            # CLI tool (dpm) — scriptable interface
+      cli.py        # Entry point, argparse, dispatch
+      commands.py   # Command handlers
+      formatting.py # Table rendering
+      wait.py       # Polling helpers
+    gui/            # PyQt5 GUI (dpm-gui)
+      main.py       # Application entry point
+      main_window.py
+      process_dialog.py
+      process_output.py
+    utils/          # Shared utilities
+      config.py     # Config loading
+      local_agent.py
+    spec_io.py      # YAML process spec save/load
+  dpm_msgs/         # Generated LCM message bindings
+```
 
 ## License
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Node agent for running and monitoring processes on a host."""
+"""DPM agent — runs on each host to manage and monitor local processes."""
 
 import fcntl
 import logging
@@ -11,6 +11,8 @@ import socket
 import sys
 import threading
 import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from subprocess import PIPE
 
 import psutil
@@ -18,11 +20,29 @@ import yaml
 
 import lcm
 
-# Define process state constants
+# Process state constants — single source of truth for the lifecycle.
+#
+# State machine transitions:
+#   READY   →  RUNNING  (start_process succeeds)
+#   READY   →  FAILED   (start_process raises)
+#   RUNNING →  READY    (clean exit: code 0, or graceful stop via SIGTERM)
+#   RUNNING →  FAILED   (non-zero exit detected by monitor_process)
+#   RUNNING →  KILLED   (stop_process escalated to SIGKILL)
+#   FAILED  →  RUNNING  (manual restart or auto_restart)
+#   KILLED  →  RUNNING  (manual restart)
+#
 STATE_READY = "T"
 STATE_RUNNING = "R"
 STATE_FAILED = "F"
 STATE_KILLED = "K"
+
+# Human-readable labels derived from state codes (single source of truth).
+STATE_DISPLAY = {
+    STATE_READY: "Ready",
+    STATE_RUNNING: "Running",
+    STATE_FAILED: "Failed",
+    STATE_KILLED: "Killed",
+}
 
 # Maximum bytes sent per process per publish cycle. Prevents a chatty process
 # from producing LCM messages too large to fragment reliably over UDP.
@@ -41,9 +61,9 @@ except ModuleNotFoundError as e:
         "Failed to import 'dpm_msgs'.\n"
         "Install the project and run via the installed entry point:\n"
         "  pip install -e .\n"
-        "  dpm-node\n"
+        "  dpm-agent\n"
         "Or for repo runs without install:\n"
-        "  PYTHONPATH=src python -m dpm.node.node\n"
+        "  PYTHONPATH=src python -m dpm.agent.agent\n"
     ) from e
 
 
@@ -56,18 +76,21 @@ def get_ip() -> str:
         return "127.0.0.1"
 
 
+@dataclass
 class Timer:
     """Simple periodic timer helper. Uses monotonic clock to be NTP-safe."""
+    period: float
+    next: float = field(init=False)
 
-    def __init__(self, timeout: float):
-        now = time.monotonic()
-        self.period = timeout
-        self.next = now + timeout
+    def __post_init__(self):
+        self.next = time.monotonic() + self.period
 
     def timeout(self) -> bool:
         now = time.monotonic()
         if now > self.next:
-            self.next += self.period
+            # Skip past any missed intervals to avoid burst catch-up
+            missed = int((now - self.next) / self.period)
+            self.next += (missed + 1) * self.period
             return True
         return False
 
@@ -102,8 +125,8 @@ def stream_reader(stream, output_list, lock: threading.Lock) -> None:
         logging.error("Stream Reader: Error reading stream: %s", e)
 
 
-class NodeAgent:
-    """LCM-based node agent managing local processes and telemetry."""
+class Agent:
+    """LCM-based agent managing local processes and telemetry on a single host."""
 
     def __init__(self, config_file: str = "/etc/dpm/dpm.yaml"):
         self.config = self.load_config(config_file)
@@ -123,21 +146,31 @@ class NodeAgent:
         self.log_file_path = (
             self.config.get("log_file_path")
             or self.config.get("log_file")
-            or "/var/log/dpm/dpm-node.log"
+            or "/var/log/dpm/dpm-agent.log"
+        )
+
+        # Process persistence: when enabled, the agent saves its process
+        # registry to disk on every create/delete and reloads on startup.
+        # Processes with auto_restart=True are started automatically on reload.
+        self._persist = bool(self.config.get("persist_processes", False))
+        self._persist_path = (
+            self.config.get("persist_path")
+            or "/var/lib/dpm/processes.yaml"
         )
 
         self.hostname = socket.gethostname()
-        self.last_publish_time = 0
-        self.last_net_tx = 0
-        self.last_net_rx = 0
+        _net = psutil.net_io_counters()
+        self.last_publish_time = time.time()
+        self.last_net_tx = _net.bytes_sent
+        self.last_net_rx = _net.bytes_recv
         self.processes = {}
 
         self._stop_event = threading.Event()
 
         # Track last seen seq per sender to drop UDP duplicates.
         # Key: (hostname, action, name) — value: last accepted seq.
-        # Capped at _LAST_SEQ_MAX_KEYS entries to prevent unbounded growth.
-        self._last_seq: dict = {}
+        # Capped at _LAST_SEQ_MAX_KEYS entries; FIFO eviction via OrderedDict.
+        self._last_seq: OrderedDict = OrderedDict()
         self._last_seq_lock = threading.Lock()
         self._LAST_SEQ_MAX_KEYS = 1000
 
@@ -150,13 +183,24 @@ class NodeAgent:
 
         self.init_logging()
         logging.info(
-            "Host initialized with channels: command=%s info=%s",
+            "Host initialized with channels: command=%s info=%s persist=%s",
             self.command_channel,
             self.host_info_channel,
+            self._persist,
         )
+
+        if self._persist:
+            self._load_settings()
+            self._load_registry()
 
     def _init_lcm(self):
         """(Re)initialize LCM and subscriptions."""
+        old = getattr(self, "lc", None)
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
         self.lc = lcm.LCM(self.lc_url)
 
         # IMPORTANT: re-subscribe after recreating LCM
@@ -184,23 +228,9 @@ class NodeAgent:
             logging.error("LCM reinit failed: %s", e2)
 
     def load_config(self, config_path: str) -> dict:
-        if not os.path.isfile(config_path):
-            raise FileNotFoundError(f"Configuration file {config_path} not found.")
-        if not os.access(config_path, os.R_OK):
-            raise PermissionError(f"Configuration file {config_path} is not readable.")
-        try:
-            with open(config_path, "r", encoding="utf-8") as file:
-                config = yaml.safe_load(file)
-        except yaml.YAMLError as e:
-            raise ValueError(
-                f"Error parsing YAML configuration file {config_path}: {e}"
-            ) from e
-        except OSError as e:
-            raise RuntimeError(
-                f"Unexpected error loading configuration file {config_path}: {e}"
-            ) from e
+        from dpm.utils.config import load_dpm_config
 
-        required_fields = [
+        config = load_dpm_config(config_path, [
             "command_channel",
             "host_info_channel",
             "proc_outputs_channel",
@@ -211,10 +241,7 @@ class NodeAgent:
             "host_status_interval",
             "procs_status_interval",
             "lcm_url",
-        ]
-        for field in required_fields:
-            if field not in config:
-                raise KeyError(f"Missing required configuration field: {field}")
+        ])
 
         # Validate numeric ranges to prevent tight loops or indefinite hangs
         for interval_key in ("monitor_interval", "output_interval",
@@ -268,7 +295,9 @@ class NodeAgent:
         # Non-systemd: optional file logging
         log_path = self.log_file_path
         try:
-            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            log_dir = os.path.dirname(log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
             fh = logging.handlers.RotatingFileHandler(
                 log_path, maxBytes=10 * 1024 * 1024, backupCount=5
             )
@@ -279,8 +308,130 @@ class NodeAgent:
         except OSError as e:
             logger.warning("File logging disabled (%s); stdout only.", e)
 
+    # -----------------
+    # Persistence (atomic YAML writes)
+    # -----------------
+    @staticmethod
+    def _atomic_yaml_write(path: str, data) -> None:
+        """Write data to a YAML file atomically (temp + rename)."""
+        dir_path = os.path.dirname(path)
+        if dir_path:
+            os.makedirs(dir_path, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp, path)
+
+    def _save_registry(self) -> None:
+        """Save process definitions to disk (called on create/delete)."""
+        if not self._persist:
+            return
+        specs = []
+        for name, info in self.processes.items():
+            specs.append({
+                "name": name,
+                "exec_command": info["exec_command"],
+                "group": info.get("group", ""),
+                "auto_restart": info["auto_restart"],
+                "realtime": info["realtime"],
+            })
+        try:
+            self._atomic_yaml_write(self._persist_path, specs)
+            logging.debug("Persisted %d process specs to %s", len(specs), self._persist_path)
+        except OSError as e:
+            logging.error("Failed to persist process registry: %s", e)
+
+    def _save_settings(self) -> None:
+        """Save runtime settings overrides to disk."""
+        if not self._persist:
+            return
+        settings = {
+            "monitor_interval": self.monitor_timer.period,
+            "output_interval": self.output_timer.period,
+            "host_status_interval": self.host_status_timer.period,
+            "procs_status_interval": self.procs_status_timer.period,
+        }
+        settings_path = os.path.join(os.path.dirname(self._persist_path), "settings.yaml")
+        try:
+            self._atomic_yaml_write(settings_path, settings)
+            logging.debug("Persisted settings to %s", settings_path)
+        except OSError as e:
+            logging.error("Failed to persist settings: %s", e)
+
+    def _load_registry(self) -> None:
+        """Load process definitions from disk on startup."""
+        if not os.path.exists(self._persist_path):
+            logging.info("No persisted registry at %s", self._persist_path)
+            return
+        try:
+            with open(self._persist_path, "r", encoding="utf-8") as f:
+                specs = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            logging.error("Failed to load persisted registry: %s", e)
+            return
+        if not isinstance(specs, list):
+            logging.warning("Persisted registry is not a list, ignoring.")
+            return
+
+        loaded = 0
+        auto_started = 0
+        for spec in specs:
+            if not isinstance(spec, dict):
+                continue
+            name = spec.get("name", "")
+            exec_command = spec.get("exec_command", "")
+            if not name or not exec_command:
+                continue
+            self.create_process(
+                name,
+                exec_command,
+                spec.get("auto_restart", False),
+                spec.get("realtime", False),
+                spec.get("group", ""),
+            )
+            loaded += 1
+            if spec.get("auto_restart", False):
+                self.start_process(name)
+                auto_started += 1
+
+        logging.info(
+            "Loaded %d processes from %s (%d auto-started)",
+            loaded, self._persist_path, auto_started,
+        )
+
+    def _load_settings(self) -> None:
+        """Load runtime settings overrides from disk on startup."""
+        settings_path = os.path.join(os.path.dirname(self._persist_path), "settings.yaml")
+        if not os.path.exists(settings_path):
+            return
+        try:
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
+            logging.error("Failed to load persisted settings: %s", e)
+            return
+        if not isinstance(settings, dict):
+            return
+
+        changed = []
+        for key, timer in [
+            ("monitor_interval", self.monitor_timer),
+            ("output_interval", self.output_timer),
+            ("host_status_interval", self.host_status_timer),
+            ("procs_status_interval", self.procs_status_timer),
+        ]:
+            val = settings.get(key)
+            if isinstance(val, (int, float)) and val >= 0.05:
+                timer.period = float(val)
+                changed.append(f"{key}={val}")
+
+        if changed:
+            logging.info("Loaded persisted settings: %s", ", ".join(changed))
+
     def command_handler(self, channel, data) -> None:
-        """Handle incoming command messages from the controller."""
+        """Handle incoming command messages."""
         msg = command_t.decode(data)
 
         # Ignore commands not addressed to this host. An empty hostname is
@@ -288,23 +439,23 @@ class NodeAgent:
         if msg.hostname and msg.hostname != self.hostname:
             return
 
-        # Drop UDP duplicates using the monotonic seq number.
+        # Drop duplicate or reordered UDP commands via monotonic seq.
+        # Accept seq==0 when last>0 as a supervisor-restart signal.
         dedup_key = (msg.hostname, msg.action, msg.name)
         with self._last_seq_lock:
             last = self._last_seq.get(dedup_key, -1)
-            if msg.seq <= last:
+            if msg.seq <= last and not (msg.seq == 0 and last > 0):
                 logging.debug("Dropping duplicate command seq=%d key=%s", msg.seq, dedup_key)
                 return
-            # Evict oldest entry if cap reached to bound memory usage
-            if len(self._last_seq) >= self._LAST_SEQ_MAX_KEYS and dedup_key not in self._last_seq:
-                oldest = next(iter(self._last_seq))
-                del self._last_seq[oldest]
+            # Evict oldest entry (FIFO) if cap reached
+            if dedup_key not in self._last_seq and len(self._last_seq) >= self._LAST_SEQ_MAX_KEYS:
+                self._last_seq.popitem(last=False)
             self._last_seq[dedup_key] = msg.seq
 
         action = msg.action
 
         if action == "create_process":
-            # Call positionally to match existing NodeAgent.create_process signature
+            # Call positionally to match Agent.create_process signature
             # Expected order (based on current codebase usage): (name, exec_command, auto_restart, realtime, group)
             self.create_process(
                 msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group
@@ -325,6 +476,12 @@ class NodeAgent:
         elif action == "stop_group":
             self.stop_group(msg.group)
 
+        elif action == "set_interval":
+            self.set_interval(msg.exec_command)
+
+        elif action == "set_persistence":
+            self.set_persistence(msg.exec_command)
+
         else:
             logging.warning("Unknown action: %s", action)
 
@@ -332,22 +489,28 @@ class NodeAgent:
         self, process_name, exec_command, auto_restart, realtime, group
     ) -> None:
         """Register a process definition without starting it."""
+        existing = self.processes.get(process_name)
+        if existing is not None and is_running(existing.get("proc")):
+            logging.warning(
+                "Create Process: Process %s is running (PID %s); stopping before re-create.",
+                process_name, existing["proc"].pid,
+            )
+            self.stop_process(process_name)
+
         self.processes[process_name] = {
             "proc": None,
             "ps_proc": None,
-            "output_lock": threading.Lock(),
             "exec_command": exec_command,
             "auto_restart": bool(auto_restart),
             "realtime": bool(realtime),
             "group": group,
             "state": STATE_READY,
-            "status": "stopped",
             "errors": "",
             "exit_code": -1,
             "stdout": "",
             "stderr": "",
-            "stdout_lines": [],
-            "stderr_lines": [],
+            "restart_count": 0,
+            "last_restart_time": 0.0,
         }
         logging.info(
             "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
@@ -356,6 +519,7 @@ class NodeAgent:
             auto_restart,
             realtime,
         )
+        self._save_registry()
 
     def delete_process(self, process_name) -> None:
         """Delete a process definition, stopping it first if needed."""
@@ -366,6 +530,7 @@ class NodeAgent:
             self.processes[process_name]["ps_proc"] = None
             del self.processes[process_name]
             logging.info("Delete Process: Deleted process: %s", process_name)
+            self._save_registry()
         else:
             logging.warning(
                 "Delete Process: Process %s not found, ignoring command.", process_name
@@ -403,6 +568,15 @@ class NodeAgent:
             process_name,
             exec_command,
         )
+
+        # Set output scaffolding before Popen so monitor_process always finds them
+        output_lock = threading.Lock()
+        stdout_lines = []
+        stderr_lines = []
+        proc_info["output_lock"] = output_lock
+        proc_info["stdout_lines"] = stdout_lines
+        proc_info["stderr_lines"] = stderr_lines
+
         try:
             argv = shlex.split(exec_command)
             proc = psutil.Popen(
@@ -415,17 +589,14 @@ class NodeAgent:
                 bufsize=1,
                 start_new_session=True,
             )
-            self.processes[process_name]["proc"] = proc
-            self.processes[process_name]["state"] = STATE_RUNNING
-            self.processes[process_name]["status"] = "running"
-            self.processes[process_name]["errors"] = ""
+            proc_info["proc"] = proc
+            proc_info["state"] = STATE_RUNNING
+            proc_info["errors"] = ""
+            proc_info["restart_count"] = 0
 
             # Start threads to read stdout and stderr.
             # A single lock guards both lists so the drain in monitor_process
             # is always consistent with concurrent appends from the reader threads.
-            output_lock = threading.Lock()
-            stdout_lines = []
-            stderr_lines = []
             stdout_thread = threading.Thread(
                 target=stream_reader, args=(proc.stdout, stdout_lines, output_lock), daemon=True
             )
@@ -434,10 +605,6 @@ class NodeAgent:
             )
             stdout_thread.start()
             stderr_thread.start()
-
-            self.processes[process_name]["output_lock"] = output_lock
-            self.processes[process_name]["stdout_lines"] = stdout_lines
-            self.processes[process_name]["stderr_lines"] = stderr_lines
 
             logging.info(
                 "Start Process: Started process: %s with PID %s", process_name, proc.pid
@@ -452,7 +619,8 @@ class NodeAgent:
 
             if realtime:
                 try:
-                    os.sched_setscheduler(proc.pid, os.SCHED_FIFO, os.sched_param(40))
+                    rt_prio = self.config.get("rt_priority", 40)
+                    os.sched_setscheduler(proc.pid, os.SCHED_FIFO, os.sched_param(rt_prio))
                     logging.info(
                         "Start Process: Set real-time priority for process: %s with PID %s",
                         process_name,
@@ -479,7 +647,6 @@ class NodeAgent:
             error_msg = f"Failed to start process {process_name}: {e}"
             logging.error("Start Process: %s", error_msg)
             proc_info["state"] = STATE_FAILED
-            proc_info["status"] = "failed"
             proc_info["errors"] = str(e)
             proc_info["proc"] = None
 
@@ -536,9 +703,8 @@ class NodeAgent:
                 process_name,
                 proc.pid,
             )
-            proc_info["exit_code"] = proc.returncode
+            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else 0
             proc_info["state"] = STATE_READY
-            proc_info["status"] = "stopped"
 
         except psutil.TimeoutExpired:
             # Escalate to SIGKILL for the group
@@ -557,9 +723,8 @@ class NodeAgent:
                 process_name,
                 proc.pid,
             )
-            proc_info["exit_code"] = proc.returncode
+            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else -9
             proc_info["state"] = STATE_KILLED
-            proc_info["status"] = "killed"
 
         finally:
             proc_info["proc"] = None
@@ -611,16 +776,23 @@ class NodeAgent:
 
         if not is_running(proc):
             exit_code = proc.poll()
-            logging.warning(
-                "Monitor Process: Process %s stopped with exit code: %s",
-                process_name,
-                exit_code,
-            )
-
-            proc_info["state"] = STATE_FAILED
-            proc_info["status"] = "failed"
-            proc_info["exit_code"] = exit_code if exit_code is not None else -1
+            exit_code = exit_code if exit_code is not None else -1
+            proc_info["exit_code"] = exit_code
             proc_info["proc"] = None
+
+            if exit_code == 0:
+                logging.info(
+                    "Monitor Process: Process %s exited cleanly (code 0).",
+                    process_name,
+                )
+                proc_info["state"] = STATE_READY
+            else:
+                logging.warning(
+                    "Monitor Process: Process %s failed with exit code: %s",
+                    process_name,
+                    exit_code,
+                )
+                proc_info["state"] = STATE_FAILED
 
             # Capture any remaining output
             output_lock = proc_info["output_lock"]
@@ -649,11 +821,22 @@ class NodeAgent:
                         process_name,
                         pub_e,
                     )
-            else:
-                proc_info["errors"] = "Process stopped unexpectedly."
+            elif exit_code != 0:
+                proc_info["errors"] = f"Process exited with code {exit_code}."
 
-            if proc_info["auto_restart"]:
-                logging.info("Monitor Process: Restarting process %s.", process_name)
+            # Auto-restart only on failure (non-zero exit), with exponential backoff
+            if proc_info["auto_restart"] and exit_code != 0:
+                restart_count = proc_info.get("restart_count", 0)
+                elapsed = time.monotonic() - proc_info.get("last_restart_time", 0.0)
+                backoff = min(2 ** restart_count, 60)
+                if elapsed < backoff:
+                    return  # wait for backoff period
+                proc_info["restart_count"] = restart_count + 1
+                proc_info["last_restart_time"] = time.monotonic()
+                logging.info(
+                    "Monitor Process: Restarting process %s (attempt %d, backoff %.0fs).",
+                    process_name, restart_count + 1, backoff,
+                )
                 self.start_process(process_name)
             return
 
@@ -704,6 +887,8 @@ class NodeAgent:
         msg.network_sent = sent_kbps / 1024
         msg.network_recv = recv_kbps / 1024
         msg.uptime = uptime
+        msg.report_interval = self.host_status_timer.period
+        msg.persist = self._persist
 
         try:
             self.lc.publish(self.host_info_channel, msg.encode())
@@ -753,12 +938,7 @@ class NodeAgent:
     ) -> None:
         p = self._ensure_psutil_proc(proc_info, pid)
         if p is None:
-            msg_proc.cpu = 0.0
-            msg_proc.mem_rss = 0
-            msg_proc.mem_vms = 0
-            msg_proc.priority = 0
-            msg_proc.ppid = -1
-            msg_proc.runtime = 0
+            self._zero_proc_metrics(msg_proc)
             return
 
         try:
@@ -804,7 +984,7 @@ class NodeAgent:
             msg_proc.group = proc_info["group"]
             msg_proc.hostname = self.hostname
             msg_proc.state = proc_info["state"]
-            msg_proc.status = proc_info["status"]
+            msg_proc.status = STATE_DISPLAY.get(proc_info["state"], "Ready").lower()
             msg_proc.errors = proc_info["errors"]
             msg_proc.exec_command = proc_info["exec_command"]
             msg_proc.auto_restart = proc_info["auto_restart"]
@@ -879,6 +1059,44 @@ class NodeAgent:
             if self._group_matches(info.get("group", ""), group):
                 self.stop_process(name)
 
+    def set_persistence(self, value_str: str) -> None:
+        """Enable or disable process registry persistence at runtime.
+
+        The value is 'on' or 'off' (passed via exec_command field).
+        """
+        val = (value_str or "").strip().lower()
+        if val in ("on", "true", "1"):
+            self._persist = True
+            self._save_registry()
+            self._save_settings()
+            logging.info("Persistence enabled (path: %s)", self._persist_path)
+        elif val in ("off", "false", "0"):
+            self._persist = False
+            logging.info("Persistence disabled")
+        else:
+            logging.warning("set_persistence: invalid value %r (expected on/off)", value_str)
+
+    def set_interval(self, value_str: str) -> None:
+        """Set all telemetry/monitor intervals to a new value (seconds).
+
+        The value is passed as a string (via exec_command field of command_t).
+        """
+        try:
+            seconds = float(value_str)
+        except (TypeError, ValueError):
+            logging.warning("set_interval: invalid value %r", value_str)
+            return
+        if seconds < 0.05:
+            logging.warning("set_interval: value %.2f too small (min 0.05)", seconds)
+            return
+
+        for timer in (self.monitor_timer, self.output_timer,
+                      self.host_status_timer, self.procs_status_timer):
+            timer.period = seconds
+
+        logging.info("Telemetry interval set to %.1fs", seconds)
+        self._save_settings()
+
     def run(self) -> None:
         """Main event loop for monitoring and publishing."""
         logging.info("Host running.")
@@ -925,7 +1143,7 @@ class NodeAgent:
 
 def main() -> None:
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
-    agent = NodeAgent(config_file=config_path)
+    agent = Agent(config_file=config_path)
     agent.run()
 
 

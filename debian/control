@@ -1,0 +1,56 @@
+Source: dpm
+Section: admin
+Priority: optional
+Maintainer: Matias Bustos SM <matias.bustos@example.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ python3-all,
+ python3-setuptools,
+ python3-yaml,
+ python3-psutil,
+Standards-Version: 4.6.2
+Homepage: https://github.com/mbustos/dpm
+Rules-Requires-Root: no
+
+Package: python3-dpm
+Architecture: all
+Depends:
+ ${python3:Depends},
+ ${misc:Depends},
+ python3-yaml,
+ python3-psutil,
+ python3-lcm,
+Description: Distributed Process Manager - Python library
+ DPM Python packages: agent, supervisor, CLI, GUI, and LCM message
+ bindings. Provides /usr/bin/dpm-agent, /usr/bin/dpm, and /usr/bin/dpm-gui.
+
+Package: dpm-agent
+Architecture: all
+Depends:
+ ${misc:Depends},
+ python3-dpm (= ${binary:Version}),
+Description: Distributed Process Manager - agent service
+ DPM agent that runs on each host in a trusted Linux cluster.
+ It manages local processes (start/stop/monitor) and publishes
+ telemetry and process output over LCM multicast.
+ .
+ Typically deployed as a systemd service (dpm-agent.service).
+ .
+ This package installs the systemd unit and default config.
+
+Package: dpm-tools
+Architecture: all
+Depends:
+ ${misc:Depends},
+ python3-dpm (= ${binary:Version}),
+Recommends:
+ python3-pyqt5,
+Description: Distributed Process Manager - CLI and GUI tools
+ DPM operator tools: a command-line interface (dpm) and
+ Qt-based GUI (dpm-gui) for managing distributed processes.
+ .
+ The GUI requires python3-pyqt5 (installed via Recommends).
+ The CLI works without PyQt5 on headless systems.
+ .
+ This package installs the desktop entry and icon for the GUI.

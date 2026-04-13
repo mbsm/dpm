@@ -1,0 +1,29 @@
+# DPM Configuration File
+# Installed to /etc/dpm/dpm.yaml (managed as a conffile — your edits are preserved on upgrade)
+
+# LCM transport
+lcm_url: "udpm://239.255.76.67:7667?ttl=1"
+
+# LCM channel names
+command_channel: "DPM/commands"
+host_info_channel: "DPM/host_info"
+proc_outputs_channel: "DPM/proc_outputs"
+host_procs_channel: "DPM/host_procs"
+
+# Timer intervals (seconds)
+monitor_interval: 5
+output_interval: 5
+host_status_interval: 5
+procs_status_interval: 5
+
+# Timeout for graceful stop before SIGKILL (seconds)
+stop_timeout: 2
+
+# Realtime scheduling priority for processes with realtime=true (1-99)
+# rt_priority: 40
+
+# Process registry persistence: save/reload process definitions across agent restarts.
+# When true, processes are saved to persist_path on every create/delete.
+# On startup, all saved processes are recreated; those with auto_restart=true are started.
+# persist_processes: false
+# persist_path: /var/lib/dpm/processes.yaml

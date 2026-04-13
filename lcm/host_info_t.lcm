@@ -5,14 +5,18 @@ struct host_info_t
     string hostname;  // hostname
     string ip;    // primary IP address
     int32_t cpus; // number of cpus
-    float cpu_usage; // host cpu usage 
+    float cpu_usage; // host cpu usage
 
     float mem_total;     // total system memory in kB
     float mem_used;
     float mem_free;
     float mem_usage; // host mem usage %
-    
+
     float network_sent;    // KB/s
     float network_recv;    // KB/s
     int64_t uptime;        // usecs from start
+
+    // Agent settings (published so CLI/GUI can display them)
+    float report_interval; // telemetry interval in seconds
+    boolean persist;       // process registry persistence enabled
 }

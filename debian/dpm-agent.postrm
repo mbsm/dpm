@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Remove config and logs on purge (not on plain remove)
+        rm -rf /etc/dpm
+        rm -rf /var/log/dpm
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        ;;
+
+    remove)
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+        fi
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

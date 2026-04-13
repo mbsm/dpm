@@ -12,9 +12,9 @@ from PyQt5.QtWidgets import (
 
 
 class ProcessDialog(QDialog):
-    def __init__(self, controller, proc=None):
+    def __init__(self, supervisor, proc=None):
         super().__init__()
-        self.controller = controller
+        self.supervisor = supervisor
         self.proc = proc
         self.init_ui()
 
@@ -90,15 +90,11 @@ class ProcessDialog(QDialog):
                 old_host = getattr(self.proc, "hostname", host)
                 old_name = getattr(self.proc, "name", None)
                 if old_name:
-                    self.controller.stop_proc(old_name, old_host)
-                    self.controller.del_proc(old_name, old_host)
-                self.controller.create_proc(
-                    name, proc_command, group, host, auto_restart, realtime
-                )
-            else:
-                self.controller.create_proc(
-                    name, proc_command, group, host, auto_restart, realtime
-                )
+                    self.supervisor.stop_proc(old_name, old_host)
+                    self.supervisor.del_proc(old_name, old_host)
+            self.supervisor.create_proc(
+                name, proc_command, group, host, auto_restart, realtime
+            )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")
             return

@@ -1,0 +1,6 @@
+dpm (0.1.0) unstable; urgency=low
+
+  * Initial Debian packaging.
+  * Split into dpm-agent (node service) and dpm-controller (GUI).
+
+ -- Matias Bustos SM <matias.bustos@example.com>  Sat, 12 Apr 2026 12:00:00 +0000

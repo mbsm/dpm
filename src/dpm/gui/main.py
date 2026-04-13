@@ -1,20 +1,28 @@
 import os
 import sys
 
-from PyQt5.QtWidgets import QApplication, QMessageBox
-
-from dpm.controller.controller import Controller  # type: ignore
-from dpm.gui.main_window import MainWindow  # type: ignore
-
 
 def main() -> None:
+    try:
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+    except ImportError:
+        print(
+            "dpm-gui: error: PyQt5 is required but not installed.\n"
+            "Install it with: sudo apt install python3-pyqt5",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    from dpm.supervisor.supervisor import Supervisor
+    from dpm.gui.main_window import MainWindow
+
     app = QApplication(sys.argv)
 
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
 
     try:
-        controller = Controller(config_path)
-        controller.start()
+        supervisor = Supervisor(config_path)
+        supervisor.start()
     except Exception as e:
         QMessageBox.critical(
             None,
@@ -23,7 +31,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    window = MainWindow(controller)
+    window = MainWindow(supervisor)
     window.show()
     sys.exit(app.exec_())
 

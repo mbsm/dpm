@@ -1,9 +1,10 @@
-"""Controller that publishes commands and aggregates node telemetry for the GUI."""
+"""Supervisor — publishes commands to agents and aggregates telemetry for the UI."""
 
 import logging
 import os
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import yaml
@@ -28,7 +29,15 @@ except ModuleNotFoundError as e:
     ) from e
 
 
-class Controller:
+@dataclass
+class _ProcOutputState:
+    """Per-process output state: last LCM message, rolling text buffer, generation counter."""
+    last_msg: Optional[proc_output_t] = None
+    buf: str = ""
+    gen: int = 0
+
+
+class Supervisor:
     """
     Thread model:
       - One background thread owns lc_sub and calls handle_timeout().
@@ -58,15 +67,11 @@ class Controller:
         # data (hostname -> host_info_t)
         self._hosts: Dict[str, host_info_t] = {}
 
-        # data (proc_name -> proc_info_t)
-        self._procs: Dict[str, proc_info_t] = {}
+        # data ((hostname, proc_name) -> proc_info_t)
+        self._procs: Dict[Tuple[str, str], proc_info_t] = {}
 
-        # last message + rolling text buffers (proc_name -> ...)
-        self._proc_outputs: Dict[str, proc_output_t] = {}
-        self._proc_output_buffers: Dict[str, str] = {}
-
-        # Incremented when a buffer is trimmed/reset so GUI can resync safely
-        self._proc_output_buffer_gen: Dict[str, int] = {}
+        # Per-process output state (proc_name -> _ProcOutputState)
+        self._proc_output_states: Dict[str, _ProcOutputState] = {}
 
         # Monotonic command sequence number (GUI thread only — no lock needed)
         self._cmd_seq: int = 0
@@ -83,36 +88,25 @@ class Controller:
         self._init_lcm()
 
     def load_config(self, config_path: str) -> dict:
-        if not os.path.isfile(config_path):
-            raise FileNotFoundError(f"Configuration file {config_path} not found.")
-        if not os.access(config_path, os.R_OK):
-            raise PermissionError(f"Configuration file {config_path} is not readable.")
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
-        except yaml.YAMLError as e:
-            raise ValueError(
-                f"Error parsing YAML configuration file {config_path}: {e}"
-            ) from e
-        except OSError as e:
-            raise RuntimeError(
-                f"Unexpected error loading configuration file {config_path}: {e}"
-            ) from e
+        from dpm.utils.config import load_dpm_config
 
-        required = [
+        return load_dpm_config(config_path, [
             "command_channel",
             "host_info_channel",
             "proc_outputs_channel",
             "host_procs_channel",
             "lcm_url",
-        ]
-        for k in required:
-            if k not in config:
-                raise KeyError(f"Missing required configuration field: {k}")
-        return config
+        ])
 
     def _init_lcm(self) -> None:
         """(Re)initialize LCM instances and subscriptions."""
+        for attr in ("lc_sub", "lc_pub"):
+            old = getattr(self, attr, None)
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:
+                    pass
         self.lc_sub = lcm.LCM(self.lc_url)
         self.lc_pub = lcm.LCM(self.lc_url)
 
@@ -122,7 +116,7 @@ class Controller:
         self.lc_sub.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
 
         logging.info(
-            "Controller LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
+            "Supervisor LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
             self.lc_url,
             self.command_channel,
             self.host_info_channel,
@@ -131,18 +125,18 @@ class Controller:
         )
 
     def _reconnect_lcm(self, err: Exception) -> None:
-        logging.exception("Controller LCM error: %s", err)
+        logging.exception("Supervisor LCM error: %s", err)
         delay = self._lcm_backoff_s
-        logging.warning("Reinitializing Controller LCM in %.2fs...", delay)
+        logging.warning("Reinitializing Supervisor LCM in %.2fs...", delay)
         time.sleep(delay)
         self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
 
         try:
             self._init_lcm()
             self._lcm_backoff_s = 0.25
-            logging.info("Controller LCM reinitialized successfully.")
+            logging.info("Supervisor LCM reinitialized successfully.")
         except (OSError, RuntimeError) as e2:
-            logging.exception("Controller LCM reinit failed: %s", e2)
+            logging.exception("Supervisor LCM reinit failed: %s", e2)
 
     # -----------------
     # LCM handlers (background thread)
@@ -167,19 +161,19 @@ class Controller:
         # Update atomically under lock (avoid GUI races)
         with self._procs_lock:
             # remove old procs for this host that are not in the new set
-            existing_names = [
-                n
-                for (n, p) in self._procs.items()
-                if getattr(p, "hostname", "") == hostname
+            existing_keys = [
+                k
+                for k in self._procs
+                if k[0] == hostname
             ]
             new_names = {p.name for p in msg.procs}
-            for n in existing_names:
-                if n not in new_names:
-                    del self._procs[n]
+            for k in existing_keys:
+                if k[1] not in new_names:
+                    del self._procs[k]
 
             # upsert
             for p in msg.procs:
-                self._procs[p.name] = p
+                self._procs[(hostname, p.name)] = p
 
     def proc_outputs_handler(self, _channel, data) -> None:
         try:
@@ -195,17 +189,16 @@ class Controller:
         if not out and not err:
             return
 
-        chunk_parts = []
-        if out:
-            chunk_parts.append(out)
+        parts = [out] if out else []
         if err:
-            chunk_parts.append("[stderr]\n" + err)
-        chunk = "\n".join(chunk_parts)
+            parts.append("[stderr]\n" + err)
+        chunk = "\n".join(parts)
 
         with self._outputs_lock:
-            self._proc_outputs[name] = msg
+            state = self._proc_output_states.setdefault(name, _ProcOutputState())
+            state.last_msg = msg
 
-            buf = self._proc_output_buffers.get(name, "")
+            buf = state.buf
             if buf and not buf.endswith("\n") and not chunk.startswith("\n"):
                 buf += "\n"
             buf += chunk
@@ -214,12 +207,9 @@ class Controller:
             MAX_BYTES = 2 * 1024 * 1024  # 2MB per proc
             if len(buf) > MAX_BYTES:
                 buf = buf[-MAX_BYTES:]
-                self._proc_output_buffer_gen[name] = (
-                    self._proc_output_buffer_gen.get(name, 0) + 1
-                )
+                state.gen += 1
 
-            self._proc_output_buffers[name] = buf
-            self._proc_output_buffer_gen.setdefault(name, 0)  # init on first message only
+            state.buf = buf
 
     def get_proc_output_delta(
         self, proc_name: str, last_gen: int, last_len: int
@@ -232,10 +222,12 @@ class Controller:
           - reset=False means caller can append delta_text.
         """
         with self._outputs_lock:
-            buf = self._proc_output_buffers.get(proc_name, "")
-            cur_gen = self._proc_output_buffer_gen.get(proc_name, 0)
-
-        cur_len = len(buf)
+            state = self._proc_output_states.get(proc_name)
+            if state is None:
+                return 0, "", False, 0
+            buf = state.buf
+            cur_gen = state.gen
+            cur_len = len(buf)
 
         # Buffer was trimmed/reset since caller last saw it -> full redraw
         if cur_gen != last_gen:
@@ -253,13 +245,14 @@ class Controller:
         Thread-safe: return the last proc_output_t for a single process (no dict copy).
         """
         with self._outputs_lock:
-            return self._proc_outputs.get(proc_name)
+            state = self._proc_output_states.get(proc_name)
+            return state.last_msg if state else None
 
     # Keep snapshot property if other GUI parts use it, but prefer get_proc_output_delta()
     @property
     def proc_output_buffers(self) -> Dict[str, str]:
         with self._outputs_lock:
-            return dict(self._proc_output_buffers)
+            return {k: s.buf for k, s in self._proc_output_states.items()}
 
     # -----------------
     # Publishing (GUI thread)
@@ -269,7 +262,13 @@ class Controller:
             raise RuntimeError("LCM publisher not initialized.")
         msg.seq = self._cmd_seq
         self._cmd_seq += 1
-        self.lc_pub.publish(self.command_channel, msg.encode())
+        try:
+            self.lc_pub.publish(self.command_channel, msg.encode())
+        except OSError as e:
+            logging.error("Publish failed, reconnecting: %s", e)
+            self._reconnect_lcm(e)
+            # Retry once after reconnect
+            self.lc_pub.publish(self.command_channel, msg.encode())
 
     def _send_command(
         self,
@@ -318,24 +317,30 @@ class Controller:
     def stop_group(self, group: str, host: str) -> None:
         self._send_command("stop_group", hostname=host, group=group)
 
+    def set_interval(self, host: str, seconds: float) -> None:
+        self._send_command("set_interval", hostname=host, exec_command=str(seconds))
+
+    def set_persistence(self, host: str, enabled: bool) -> None:
+        self._send_command("set_persistence", hostname=host, exec_command="on" if enabled else "off")
+
     # -----------------
     # Thread-safe snapshots for GUI
     # -----------------
-    def _snapshot(self, lock: threading.Lock, d: dict) -> dict:
-        with lock:
-            return dict(d)
-
     @property
     def hosts(self) -> Dict[str, host_info_t]:
-        return self._snapshot(self._hosts_lock, self._hosts)
+        with self._hosts_lock:
+            return dict(self._hosts)
 
     @property
-    def procs(self) -> Dict[str, proc_info_t]:
-        return self._snapshot(self._procs_lock, self._procs)
+    def procs(self) -> Dict[Tuple[str, str], proc_info_t]:
+        with self._procs_lock:
+            return dict(self._procs)
 
     @property
     def proc_outputs(self) -> Dict[str, proc_output_t]:
-        return self._snapshot(self._outputs_lock, self._proc_outputs)
+        with self._outputs_lock:
+            return {k: s.last_msg for k, s in self._proc_output_states.items()
+                    if s.last_msg is not None}
 
     # -----------------
     # Thread management
@@ -387,5 +392,5 @@ class Controller:
                 # Same failure class as the node: lcm_handle_timeout() returned -1
                 self._reconnect_lcm(e)
             except Exception as e:
-                logging.exception("Controller LCM handler error: %s", e)
+                logging.exception("Supervisor LCM handler error: %s", e)
                 time.sleep(0.2)

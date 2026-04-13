@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dpm"
+version = "0.1.0"
+description = "Distributed Process Manager"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Matias Bustos SM", email = "matias.bustos@example.com"},
+]
+
+dependencies = [
+    "psutil>=5.9",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+gui = ["PyQt5>=5.15"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+dpm-agent = "dpm.agent.agent:main"
+dpm = "dpm.cli.cli:main"
+
+[project.gui-scripts]
+dpm-gui = "dpm.gui.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v -m 'not integration'"
+markers = [
+    "integration: tests that require a live LCM daemon and network",
+]

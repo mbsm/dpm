@@ -1,18 +1,20 @@
-"""Integration tests: real subprocesses managed by a real NodeAgent."""
+"""Integration tests: real subprocesses managed by a real Agent."""
 
 import time
 
 import psutil
 import pytest
 
-from dpm.node.node import STATE_KILLED, STATE_READY, STATE_RUNNING
+from dpm.agent.agent import STATE_KILLED, STATE_READY, STATE_RUNNING
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
 def real_agent(config_path):
-    """NodeAgent backed by real LCM — one instance for all integration tests."""
-    from dpm.node.node import NodeAgent
-    agent = NodeAgent(config_file=config_path)
+    """Agent backed by real LCM — one instance for all integration tests."""
+    from dpm.agent.agent import Agent
+    agent = Agent(config_file=config_path)
     yield agent
     # Cleanup: stop any processes left running
     for name in list(agent.processes.keys()):

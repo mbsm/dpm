@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=DPM
+Comment=Distributed Process Manager
+Exec=dpm-gui
+Icon=dpm-gui
+Type=Application
+Categories=System;Monitor;
+Keywords=process;manager;distributed;lcm;
