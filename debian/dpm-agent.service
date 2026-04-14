@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=dpm
 Group=dpm
+# Cgroup delegation for per-process resource limits
+Delegate=yes
 
 Environment=DPM_CONFIG=/etc/dpm/dpm.yaml
 ExecStart=/usr/bin/dpm-agent
