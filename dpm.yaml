@@ -20,3 +20,9 @@ stop_timeout: 2
 # Process registry persistence (agent only)
 # persist_processes: false
 # persist_path: /var/lib/dpm/processes.yaml
+
+# Maximum auto-restart attempts before suspending (-1 = unlimited)
+max_restarts: -1
+
+# Signal sent for graceful stop (SIGKILL escalation unchanged)
+stop_signal: "SIGINT"

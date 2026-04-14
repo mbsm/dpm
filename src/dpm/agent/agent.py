@@ -20,33 +20,22 @@ import yaml
 
 import lcm
 
-# Process state constants — single source of truth for the lifecycle.
-#
-# State machine transitions:
-#   READY   →  RUNNING  (start_process succeeds)
-#   READY   →  FAILED   (start_process raises)
-#   RUNNING →  READY    (clean exit: code 0, or graceful stop via SIGTERM)
-#   RUNNING →  FAILED   (non-zero exit detected by monitor_process)
-#   RUNNING →  KILLED   (stop_process escalated to SIGKILL)
-#   FAILED  →  RUNNING  (manual restart or auto_restart)
-#   KILLED  →  RUNNING  (manual restart)
-#
-STATE_READY = "T"
-STATE_RUNNING = "R"
-STATE_FAILED = "F"
-STATE_KILLED = "K"
-
-# Human-readable labels derived from state codes (single source of truth).
-STATE_DISPLAY = {
-    STATE_READY: "Ready",
-    STATE_RUNNING: "Running",
-    STATE_FAILED: "Failed",
-    STATE_KILLED: "Killed",
-}
+from dpm.constants import (
+    STATE_DISPLAY,
+    STATE_FAILED,
+    STATE_KILLED,
+    STATE_READY,
+    STATE_RUNNING,
+    STATE_SUSPENDED,
+)
 
 # Maximum bytes sent per process per publish cycle. Prevents a chatty process
 # from producing LCM messages too large to fragment reliably over UDP.
 MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
+
+# Maximum bytes buffered per process on the agent side. Prevents unbounded
+# memory growth when a process produces output faster than the publish interval.
+MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches supervisor-side cap)
 
 try:
     from dpm_msgs import (
@@ -134,6 +123,7 @@ class Agent:
         self.proc_outputs_channel = self.config["proc_outputs_channel"]
         self.host_procs_channel = self.config["host_procs_channel"]
         self.stop_timeout = self.config["stop_timeout"]
+        self.max_restarts = int(self.config.get("max_restarts", -1))
 
         self.monitor_timer = Timer(self.config["monitor_interval"])
         self.output_timer = Timer(self.config["output_interval"])
@@ -558,6 +548,14 @@ class Agent:
             )
             return
 
+        # Clear suspended state on manual start
+        if proc_info["state"] == STATE_SUSPENDED:
+            proc_info["restart_count"] = 0
+            proc_info["last_restart_time"] = 0.0
+            logging.info(
+                "Start Process: Clearing SUSPENDED state for %s.", process_name
+            )
+
         # Clear any stale buffered output from a previous run so it isn't
         # re-published after restart and mixed with the new process's output.
         proc_info["stdout"] = ""
@@ -827,6 +825,16 @@ class Agent:
             # Auto-restart only on failure (non-zero exit), with exponential backoff
             if proc_info["auto_restart"] and exit_code != 0:
                 restart_count = proc_info.get("restart_count", 0)
+
+                # Circuit breaker: suspend if max restarts exceeded
+                if self.max_restarts >= 0 and restart_count >= self.max_restarts:
+                    proc_info["state"] = STATE_SUSPENDED
+                    logging.warning(
+                        "Monitor Process: Process %s suspended after %d restart attempts.",
+                        process_name, restart_count,
+                    )
+                    return
+
                 elapsed = time.monotonic() - proc_info.get("last_restart_time", 0.0)
                 backoff = min(2 ** restart_count, 60)
                 if elapsed < backoff:
@@ -851,6 +859,12 @@ class Agent:
                 proc_info["stderr"] += stderr_content
             proc_info["stdout_lines"].clear()
             proc_info["stderr_lines"].clear()
+
+        # Cap buffers to prevent unbounded memory growth
+        if len(proc_info["stdout"]) > MAX_OUTPUT_BUFFER:
+            proc_info["stdout"] = proc_info["stdout"][-MAX_OUTPUT_BUFFER:]
+        if len(proc_info["stderr"]) > MAX_OUTPUT_BUFFER:
+            proc_info["stderr"] = proc_info["stderr"][-MAX_OUTPUT_BUFFER:]
 
     def publish_host_info(self) -> None:
         """Publish host-wide telemetry (CPU, memory, network)."""
