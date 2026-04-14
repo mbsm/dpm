@@ -31,6 +31,14 @@ class ProcessDialog(QDialog):
         self.host_input = QLineEdit()
         self.auto_restart_checkbox = QCheckBox()
         self.realtime_checkbox = QCheckBox()
+        self.work_dir_input = QLineEdit()
+        self.work_dir_input.setPlaceholderText("/path/to/working/dir")
+        self.cpuset_input = QLineEdit()
+        self.cpuset_input.setPlaceholderText("e.g. 0,1,2")
+        self.cpu_limit_input = QLineEdit()
+        self.cpu_limit_input.setPlaceholderText("e.g. 1.5 (cores)")
+        self.mem_limit_input = QLineEdit()
+        self.mem_limit_input.setPlaceholderText("e.g. 1073741824 (bytes)")
 
         if self.proc:
             self.load_process_data()
@@ -41,6 +49,10 @@ class ProcessDialog(QDialog):
         self.form_layout.addRow("Host:", self.host_input)
         self.form_layout.addRow("Auto Restart:", self.auto_restart_checkbox)
         self.form_layout.addRow("Realtime:", self.realtime_checkbox)
+        self.form_layout.addRow("Working Dir:", self.work_dir_input)
+        self.form_layout.addRow("CPU Set:", self.cpuset_input)
+        self.form_layout.addRow("CPU Limit:", self.cpu_limit_input)
+        self.form_layout.addRow("Mem Limit:", self.mem_limit_input)
 
         layout.addLayout(self.form_layout)
 
@@ -68,6 +80,12 @@ class ProcessDialog(QDialog):
             bool(getattr(self.proc, "auto_restart", False))
         )
         self.realtime_checkbox.setChecked(bool(getattr(self.proc, "realtime", False)))
+        self.work_dir_input.setText(getattr(self.proc, "work_dir", "") or "")
+        self.cpuset_input.setText(getattr(self.proc, "cpuset", "") or "")
+        cpu_limit = getattr(self.proc, "cpu_limit", 0.0) or 0.0
+        self.cpu_limit_input.setText(str(cpu_limit) if cpu_limit > 0 else "")
+        mem_limit = getattr(self.proc, "mem_limit", 0) or 0
+        self.mem_limit_input.setText(str(mem_limit) if mem_limit > 0 else "")
 
     def save_process(self):
         name = self.name_input.text().strip()
@@ -76,6 +94,16 @@ class ProcessDialog(QDialog):
         host = self.host_input.text().strip()
         auto_restart = self.auto_restart_checkbox.isChecked()
         realtime = self.realtime_checkbox.isChecked()
+        work_dir = self.work_dir_input.text().strip()
+        cpuset = self.cpuset_input.text().strip()
+        try:
+            cpu_limit = float(self.cpu_limit_input.text().strip() or "0")
+        except ValueError:
+            cpu_limit = 0.0
+        try:
+            mem_limit = int(self.mem_limit_input.text().strip() or "0")
+        except ValueError:
+            mem_limit = 0
 
         if not name or not proc_command or not host:
             QMessageBox.warning(
@@ -93,7 +121,9 @@ class ProcessDialog(QDialog):
                     self.supervisor.stop_proc(old_name, old_host)
                     self.supervisor.del_proc(old_name, old_host)
             self.supervisor.create_proc(
-                name, proc_command, group, host, auto_restart, realtime
+                name, proc_command, group, host, auto_restart, realtime,
+                work_dir=work_dir, cpuset=cpuset,
+                cpu_limit=cpu_limit, mem_limit=mem_limit,
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")
