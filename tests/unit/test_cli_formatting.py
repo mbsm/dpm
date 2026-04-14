@@ -56,8 +56,9 @@ def test_format_state_codes():
     assert format_state("R") == "Running"
     assert format_state("F") == "Failed"
     assert format_state("K") == "Killed"
-    assert format_state("") == "Unknown"
-    assert format_state("Z") == "Unknown"
+    assert format_state("") == "Ready"
+    assert format_state("Z") == "Ready"
+    assert format_state("S") == "Suspended"
 
 
 def test_format_runtime():
