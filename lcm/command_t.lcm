@@ -17,7 +17,7 @@ struct command_t
     // action: create_process, start_process, stop_process, delete_process, start_group, stop_group
     string action;
 
-    // command line to execute 
+    // command line to execute
     string exec_command;
 
     // auto restart flag
@@ -25,4 +25,16 @@ struct command_t
 
     // realtime priority flag
     boolean realtime;
+
+    // working directory for the process (empty = inherit agent cwd)
+    string work_dir;
+
+    // cgroup cpuset: comma-separated core IDs, e.g. "0,1" (empty = no isolation)
+    string cpuset;
+
+    // cgroup CPU bandwidth limit in cores, e.g. 1.5 (0.0 = unlimited)
+    double cpu_limit;
+
+    // cgroup memory limit in bytes (0 = unlimited)
+    int64_t mem_limit;
 }

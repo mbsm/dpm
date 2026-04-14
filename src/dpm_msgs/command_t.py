@@ -10,11 +10,11 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime"]
+    __slots__ = ["seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
 
-    __typenames__ = ["int64_t", "string", "string", "string", "string", "string", "boolean", "boolean"]
+    __typenames__ = ["int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "string", "string", "double", "int64_t"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
         self.seq = 0
@@ -25,6 +25,10 @@ class command_t(object):
         self.exec_command = ""
         self.auto_restart = False
         self.realtime = False
+        self.work_dir = ""
+        self.cpuset = ""
+        self.cpu_limit = 0.0
+        self.mem_limit = 0
 
     def encode(self):
         buf = BytesIO()
@@ -55,6 +59,15 @@ class command_t(object):
         buf.write(__exec_command_encoded)
         buf.write(b"\0")
         buf.write(struct.pack(">bb", self.auto_restart, self.realtime))
+        __work_dir_encoded = self.work_dir.encode('utf-8')
+        buf.write(struct.pack('>I', len(__work_dir_encoded)+1))
+        buf.write(__work_dir_encoded)
+        buf.write(b"\0")
+        __cpuset_encoded = self.cpuset.encode('utf-8')
+        buf.write(struct.pack('>I', len(__cpuset_encoded)+1))
+        buf.write(__cpuset_encoded)
+        buf.write(b"\0")
+        buf.write(struct.pack(">dq", self.cpu_limit, self.mem_limit))
 
     def decode(data):
         if hasattr(data, 'read'):
@@ -81,12 +94,17 @@ class command_t(object):
         self.exec_command = buf.read(__exec_command_len)[:-1].decode('utf-8', 'replace')
         self.auto_restart = bool(struct.unpack('b', buf.read(1))[0])
         self.realtime = bool(struct.unpack('b', buf.read(1))[0])
+        __work_dir_len = struct.unpack('>I', buf.read(4))[0]
+        self.work_dir = buf.read(__work_dir_len)[:-1].decode('utf-8', 'replace')
+        __cpuset_len = struct.unpack('>I', buf.read(4))[0]
+        self.cpuset = buf.read(__cpuset_len)[:-1].decode('utf-8', 'replace')
+        self.cpu_limit, self.mem_limit = struct.unpack(">dq", buf.read(16))
         return self
     _decode_one = staticmethod(_decode_one)
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0xde168243a01763a6) & 0xffffffffffffffff
+        tmphash = (0x149beaaa375b17a5) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)
