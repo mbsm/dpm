@@ -17,6 +17,9 @@ report_threshold: 5
 #timeout in s for stopping a process
 stop_timeout: 2
 
+# Signal sent to stop a process (default SIGINT; escalates to SIGKILL on timeout)
+stop_signal: "SIGINT"
+
 # Process registry persistence (agent only)
 # persist_processes: false
 # persist_path: /var/lib/dpm/processes.yaml
