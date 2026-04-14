@@ -47,7 +47,7 @@ def _validate_spec(spec: Dict[str, Any]) -> None:
         val = spec.get(field)
         if not isinstance(val, str) or not val.strip():
             raise ValueError(f"spec field '{field}' must be a non-empty string, got {val!r}")
-    for field in ("group",):
+    for field in ("group", "work_dir", "cpuset"):
         val = spec.get(field, "")
         if not isinstance(val, str):
             raise ValueError(f"spec field '{field}' must be a string, got {val!r}")
@@ -92,7 +92,11 @@ def load_and_create(
             realtime = bool(spec.get("realtime", False))
 
             supervisor.create_proc(
-                name, exec_command, group, host, auto_restart, realtime
+                name, exec_command, group, host, auto_restart, realtime,
+                work_dir=spec.get("work_dir", ""),
+                cpuset=str(spec.get("cpuset", "")),
+                cpu_limit=float(spec.get("cpu_limit", 0.0)),
+                mem_limit=int(spec.get("mem_limit", 0)),
             )
             created.append(f"{name}@{host}")
         except Exception as e:
@@ -136,6 +140,10 @@ def save_all_process_specs(
                 "group": group,
                 "auto_restart": auto_restart,
                 "realtime": realtime,
+                "work_dir": getattr(p, "work_dir", "") or "",
+                "cpuset": getattr(p, "cpuset", "") or "",
+                "cpu_limit": float(getattr(p, "cpu_limit", 0.0) or 0.0),
+                "mem_limit": int(getattr(p, "mem_limit", 0) or 0),
             }
         )
 

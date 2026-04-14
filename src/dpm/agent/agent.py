@@ -335,6 +335,10 @@ class Agent:
                 "group": info.get("group", ""),
                 "auto_restart": info["auto_restart"],
                 "realtime": info["realtime"],
+                "work_dir": info.get("work_dir", ""),
+                "cpuset": info.get("cpuset", ""),
+                "cpu_limit": info.get("cpu_limit", 0.0),
+                "mem_limit": info.get("mem_limit", 0),
             })
         try:
             self._atomic_yaml_write(self._persist_path, specs)
@@ -389,6 +393,10 @@ class Agent:
                 spec.get("auto_restart", False),
                 spec.get("realtime", False),
                 spec.get("group", ""),
+                work_dir=spec.get("work_dir", ""),
+                cpuset=str(spec.get("cpuset", "")),
+                cpu_limit=float(spec.get("cpu_limit", 0.0)),
+                mem_limit=int(spec.get("mem_limit", 0)),
             )
             loaded += 1
             if spec.get("auto_restart", False):

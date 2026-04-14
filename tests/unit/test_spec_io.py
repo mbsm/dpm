@@ -1,6 +1,7 @@
 """Tests for spec_io: YAML-based process spec save/load."""
 
 import types
+from unittest.mock import MagicMock, PropertyMock
 
 import pytest
 import yaml
@@ -36,7 +37,7 @@ class MockSupervisor:
         self._created = []
         self._create_raises = create_raises
 
-    def create_proc(self, name, exec_command, group, host, auto_restart, realtime):
+    def create_proc(self, name, exec_command, group, host, auto_restart, realtime, **kwargs):
         if self._create_raises:
             raise self._create_raises
         self._created.append(name)
@@ -237,3 +238,65 @@ def test_save_all_supervisor_procs_attribute_error(tmp_path):
     written, skipped = save_all_process_specs(path, BrokenSupervisor())
     assert written == 0
     assert skipped == 0
+
+
+def test_load_and_create_forwards_new_fields(tmp_path):
+    """load_and_create passes work_dir, cpuset, cpu_limit, mem_limit to supervisor."""
+    spec_file = tmp_path / "procs.yaml"
+    spec_file.write_text(
+        "name: foo\n"
+        "host: h1\n"
+        "exec_command: echo\n"
+        "work_dir: /opt/robot\n"
+        "cpuset: '0,1'\n"
+        "cpu_limit: 1.5\n"
+        "mem_limit: 1073741824\n"
+    )
+
+    mock_sup = MagicMock()
+    from dpm.spec_io import load_and_create
+    created, errors = load_and_create(str(spec_file), mock_sup)
+
+    assert len(created) == 1
+    assert len(errors) == 0
+    mock_sup.create_proc.assert_called_once_with(
+        "foo", "echo", "", "h1", False, False,
+        work_dir="/opt/robot", cpuset="0,1", cpu_limit=1.5, mem_limit=1073741824,
+    )
+
+
+def test_save_all_includes_new_fields():
+    """save_all_process_specs includes work_dir, cpuset, cpu_limit, mem_limit."""
+    import yaml
+    import tempfile, os
+
+    mock_proc = MagicMock()
+    mock_proc.name = "foo"
+    mock_proc.hostname = "h1"
+    mock_proc.exec_command = "echo"
+    mock_proc.group = "grp"
+    mock_proc.auto_restart = False
+    mock_proc.realtime = False
+    mock_proc.work_dir = "/opt/robot"
+    mock_proc.cpuset = "0,1"
+    mock_proc.cpu_limit = 1.5
+    mock_proc.mem_limit = 1073741824
+
+    mock_sup = MagicMock()
+    type(mock_sup).procs = PropertyMock(return_value={("h1", "foo"): mock_proc})
+
+    from dpm.spec_io import save_all_process_specs
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        path = f.name
+
+    try:
+        written, skipped = save_all_process_specs(path, mock_sup)
+        assert written == 1
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        assert data["work_dir"] == "/opt/robot"
+        assert data["cpuset"] == "0,1"
+        assert data["cpu_limit"] == 1.5
+        assert data["mem_limit"] == 1073741824
+    finally:
+        os.unlink(path)
