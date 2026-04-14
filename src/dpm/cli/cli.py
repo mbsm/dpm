@@ -9,6 +9,7 @@ from dpm.cli.commands import (
     cmd_create,
     cmd_delete,
     cmd_hosts,
+    cmd_launch,
     cmd_load,
     cmd_logs,
     cmd_move,
@@ -16,6 +17,7 @@ from dpm.cli.commands import (
     cmd_save,
     cmd_set_interval,
     cmd_set_persistence,
+    cmd_shutdown,
     cmd_start,
     cmd_start_all,
     cmd_start_group,
@@ -43,6 +45,8 @@ DISPATCH = {
     "set-persistence": cmd_set_persistence,
     "move": cmd_move,
     "logs": cmd_logs,
+    "launch": cmd_launch,
+    "shutdown": cmd_shutdown,
 }
 
 
@@ -163,6 +167,14 @@ def build_parser() -> argparse.ArgumentParser:
     # dpm logs name[@host]
     p_logs = sub.add_parser("logs", help="Stream process output (Ctrl+C to stop)")
     p_logs.add_argument("target", help="name or name@host")
+
+    # dpm launch script.yaml
+    p_launch = sub.add_parser("launch", help="Execute a launch script (ordered startup)")
+    p_launch.add_argument("path", help="Path to YAML launch script")
+
+    # dpm shutdown script.yaml
+    p_shutdown = sub.add_parser("shutdown", help="Execute a launch script in reverse (ordered shutdown)")
+    p_shutdown.add_argument("path", help="Path to YAML launch script")
 
     return parser
 

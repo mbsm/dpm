@@ -401,6 +401,24 @@ def cmd_move(supervisor, args) -> int:
     return 0
 
 
+def cmd_launch(supervisor, args) -> int:
+    from dpm.cli.launch import run_launch
+
+    if not wait_for_telemetry(supervisor):
+        return _no_agents()
+
+    return run_launch(supervisor, args.path, reverse=False)
+
+
+def cmd_shutdown(supervisor, args) -> int:
+    from dpm.cli.launch import run_launch
+
+    if not wait_for_telemetry(supervisor):
+        return _no_agents()
+
+    return run_launch(supervisor, args.path, reverse=True)
+
+
 def cmd_logs(supervisor, args) -> int:
     name = args.name
     host = args.host
