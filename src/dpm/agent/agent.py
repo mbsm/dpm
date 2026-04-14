@@ -455,7 +455,9 @@ class Agent:
             # Call positionally to match Agent.create_process signature
             # Expected order (based on current codebase usage): (name, exec_command, auto_restart, realtime, group)
             self.create_process(
-                msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group
+                msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group,
+                work_dir=msg.work_dir, cpuset=msg.cpuset,
+                cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
             )
 
         elif action == "start_process":
@@ -483,7 +485,8 @@ class Agent:
             logging.warning("Unknown action: %s", action)
 
     def create_process(
-        self, process_name, exec_command, auto_restart, realtime, group
+        self, process_name, exec_command, auto_restart, realtime, group,
+        work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
     ) -> None:
         """Register a process definition without starting it."""
         existing = self.processes.get(process_name)
@@ -501,6 +504,10 @@ class Agent:
             "auto_restart": bool(auto_restart),
             "realtime": bool(realtime),
             "group": group,
+            "work_dir": work_dir,
+            "cpuset": cpuset,
+            "cpu_limit": float(cpu_limit),
+            "mem_limit": int(mem_limit),
             "state": STATE_READY,
             "errors": "",
             "exit_code": -1,
@@ -582,10 +589,17 @@ class Agent:
         proc_info["stdout_lines"] = stdout_lines
         proc_info["stderr_lines"] = stderr_lines
 
+        work_dir = proc_info.get("work_dir", "")
+        if work_dir and not os.path.isdir(work_dir):
+            error_msg = f"Working directory does not exist: {work_dir}"
+            logging.error("Start Process: %s", error_msg)
+            proc_info["state"] = STATE_FAILED
+            proc_info["errors"] = error_msg
+            return
+
         try:
             argv = shlex.split(exec_command)
-            proc = psutil.Popen(
-                argv,
+            popen_kwargs = dict(
                 stdout=PIPE,
                 stderr=PIPE,
                 text=True,
@@ -594,6 +608,10 @@ class Agent:
                 bufsize=1,
                 start_new_session=True,
             )
+            if work_dir:
+                popen_kwargs["cwd"] = work_dir
+
+            proc = psutil.Popen(argv, **popen_kwargs)
             proc_info["proc"] = proc
             proc_info["state"] = STATE_RUNNING
             proc_info["errors"] = ""
