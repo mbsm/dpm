@@ -44,7 +44,8 @@ Runs on each host in the cluster, typically as a systemd service. Responsibiliti
 - Monitor process liveness and exit status
 - Publish host telemetry (CPU, memory, network) and process state over LCM
 - Stream process stdout/stderr output to the supervisor
-- Auto-restart failed processes with exponential backoff
+- Auto-restart failed processes with exponential backoff (with configurable max restart limit)
+- Per-process working directory, cpuset isolation, CPU/memory cgroup limits
 
 Source: `src/dpm/agent/agent.py`
 
@@ -71,6 +72,7 @@ dpm start camera@jet1                   # start a process
 dpm stop camera@jet1                    # stop a process
 dpm restart camera@jet1                 # stop + start
 dpm create camera@jet1 --cmd "cam-node" -g perception --auto-restart
+dpm create slam@jet2 --cmd "slam-node" --work-dir /opt/robot --cpuset 0,1 --cpu-limit 2.0 --mem-limit 4294967296
 dpm delete camera@jet1                  # stop + remove
 dpm start-group perception@jet1         # batch start
 dpm stop-group perception@jet1          # batch stop
@@ -79,6 +81,8 @@ dpm save snapshot.yaml                  # save current state
 dpm start-all                           # start every process
 dpm stop-all                            # stop every process
 dpm logs camera@jet1                    # stream output (Ctrl+C)
+dpm launch startup.yaml                 # ordered multi-host startup
+dpm shutdown startup.yaml               # reverse ordered shutdown
 ```
 
 No PyQt5 dependency — works on headless systems.
@@ -95,7 +99,7 @@ A PyQt5 desktop application. It uses the Supervisor to:
 - Stream live process output in modeless windows
 - Save/load process specs as YAML files
 
-The Supervisor is designed to be UI-agnostic — a TUI, CLI, or web frontend could use the same Supervisor class.
+The Supervisor is designed to be UI-agnostic — a CLI, web frontend, or any custom client could use the same Supervisor class.
 
 Source: `src/dpm/gui/`
 
@@ -121,25 +125,36 @@ Each managed process follows this lifecycle:
                │         ▼         ▼          ▼        │
                └──── READY      FAILED     KILLED      │
                                   │                    │
-                                  └── auto_restart ────┘
-                                      (with backoff)
+                                  ├── auto_restart ────┘
+                                  │   (with backoff)
+                                  │
+                                  └── max_restarts exceeded
+                                          │
+                                          ▼
+                                      SUSPENDED
+                                          │
+                                          └── manual start ──► RUNNING
 ```
 
 States:
-- **READY** (`T`): created or cleanly stopped (exit code 0 or graceful SIGTERM)
+- **READY** (`T`): created or cleanly stopped (exit code 0 or graceful stop)
 - **RUNNING** (`R`): process is alive
 - **FAILED** (`F`): process exited with non-zero code, or failed to start
 - **KILLED** (`K`): process was forcefully killed (SIGKILL after stop timeout)
+- **SUSPENDED** (`S`): auto-restart attempts exhausted (circuit breaker tripped)
 
 Auto-restart triggers only on FAILED state with exponential backoff (1s, 2s, 4s, ... capped at 60s).
+When `max_restarts` is configured and exceeded, the process enters SUSPENDED instead of restarting.
+A manual `dpm start` clears the counter and resumes normal operation.
 
 ## Command Actions
 
 - `create_process` — register a process definition (stops existing if running)
-- `start_process` — launch the process (any non-RUNNING state)
-- `stop_process` — SIGTERM → wait → SIGKILL if needed
-- `delete_process` — stop + remove from registry
+- `start_process` — launch the process (any non-RUNNING state; clears SUSPENDED counter)
+- `stop_process` — configurable signal (default SIGINT) → wait → SIGKILL if needed
+- `delete_process` — stop + remove from registry + cleanup cgroup
 - `start_group` / `stop_group` — batch operations by group name
+- `set_interval` / `set_persistence` — runtime agent configuration
 
 ## Message Flow
 
@@ -202,6 +217,12 @@ procs_status_interval: 1   # publish process table snapshot
 # Timeout for graceful stop before SIGKILL (seconds)
 stop_timeout: 2
 
+# Signal sent for graceful stop (SIGKILL escalation unchanged)
+stop_signal: "SIGINT"
+
+# Maximum auto-restart attempts before suspending (-1 = unlimited)
+max_restarts: -1
+
 # Realtime scheduling priority for processes with realtime=true (1-99)
 # rt_priority: 40
 
@@ -214,6 +235,57 @@ stop_timeout: 2
 
 Both the agent and supervisor read the same config file. The agent uses all fields;
 the supervisor only needs the LCM-related fields (URL and channel names).
+
+## Resource Isolation (cgroups v2)
+
+Processes can be assigned dedicated CPU cores and resource limits using cgroups v2:
+
+```bash
+dpm create slam@jet1 --cmd "slam-node" \
+    --cpuset 2,3 \
+    --cpu-limit 2.0 \
+    --mem-limit 4294967296
+```
+
+| Flag | cgroup file | Example | Description |
+|------|-------------|---------|-------------|
+| `--cpuset` | `cpuset.cpus` | `0,1` | Pin to specific cores (true isolation) |
+| `--cpu-limit` | `cpu.max` | `1.5` | CPU bandwidth limit in cores |
+| `--mem-limit` | `memory.max` | `4294967296` | Memory limit in bytes (4 GB) |
+
+The agent creates cgroup directories under `/sys/fs/cgroup/dpm/<process_name>/` and cleans them up on stop/delete.
+
+**Requirements:** cgroups v2 unified hierarchy and `Delegate=yes` in the systemd service unit (included in the dpm-agent package). On dev machines without cgroup access, processes run without limits (graceful degradation).
+
+## Launch Scripts
+
+For ordered multi-host startup, use YAML launch scripts:
+
+```yaml
+name: "AGV1 Full System"
+timeout: 30
+
+steps:
+  - start: lidar_driver@sensor-host
+  - start: camera_driver@sensor-host
+  - wait_running:
+      targets: [lidar_driver@sensor-host, camera_driver@sensor-host]
+      timeout: 15
+  - start: slam@perception-host
+  - wait_running:
+      targets: [slam@perception-host]
+  - start: planner@planning-host
+  - start: controller@planning-host
+```
+
+```bash
+dpm launch startup.yaml      # execute steps top-to-bottom
+dpm shutdown startup.yaml    # reverse: start→stop, wait_running→wait_stopped
+```
+
+Step types: `start`, `stop`, `create`, `wait_running`, `wait_stopped`, `sleep`.
+
+On failure, execution stops and the operator decides what to do (no automatic rollback).
 
 ## Log Paths
 
@@ -323,6 +395,7 @@ src/
   dpm/
     agent/          # Agent — runs on each host (dpm-agent)
       agent.py      # Agent class, process state machine, LCM handlers
+      cgroups.py    # cgroups v2 management (cpusets, CPU/memory limits)
     supervisor/     # Supervisor — aggregates telemetry, sends commands
       supervisor.py # Supervisor class, thread-safe state, LCM pub/sub
     cli/            # CLI tool (dpm) — scriptable interface
@@ -330,6 +403,7 @@ src/
       commands.py   # Command handlers
       formatting.py # Table rendering
       wait.py       # Polling helpers
+      launch.py     # YAML launch script parser and executor
     gui/            # PyQt5 GUI (dpm-gui)
       main.py       # Application entry point
       main_window.py
@@ -338,6 +412,7 @@ src/
     utils/          # Shared utilities
       config.py     # Config loading
       local_agent.py
+    constants.py    # Shared state constants and thresholds
     spec_io.py      # YAML process spec save/load
   dpm_msgs/         # Generated LCM message bindings
 ```
