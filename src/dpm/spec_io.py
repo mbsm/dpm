@@ -1,7 +1,7 @@
 """
 Save / load process specs as YAML and create processes via Supervisor.
 
-Shared module used by both GUI and TUI (keeps GUI independent of dpm.tui.*).
+Shared module used by both GUI and CLI (keeps GUI independent of dpm.cli.*).
 """
 
 from __future__ import annotations

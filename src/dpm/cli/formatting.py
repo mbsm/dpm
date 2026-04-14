@@ -3,14 +3,7 @@
 import time
 from typing import List
 
-STATE_NAME_MAP = {
-    "T": "Ready",
-    "R": "Running",
-    "F": "Failed",
-    "K": "Killed",
-}
-
-HOST_OFFLINE_THRESHOLD_SEC = 5.0
+from dpm.constants import HOST_OFFLINE_THRESHOLD_SEC, STATE_DISPLAY
 
 
 def format_table(headers: List[str], rows: List[List[str]], min_pad: int = 2) -> str:
@@ -40,7 +33,7 @@ def format_table(headers: List[str], rows: List[List[str]], min_pad: int = 2) ->
 
 def format_state(state_code: str) -> str:
     """Map a single-letter state code to a human-readable label."""
-    return STATE_NAME_MAP.get((state_code or "").strip().upper(), "Unknown")
+    return STATE_DISPLAY.get((state_code or "").strip().upper(), "Ready")
 
 
 def format_runtime(seconds: int) -> str:

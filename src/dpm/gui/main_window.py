@@ -24,22 +24,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from dpm.constants import HOST_OFFLINE_THRESHOLD_SEC, STATE_DISPLAY
 from dpm.spec_io import load_and_create, save_all_process_specs
 
 from .process_dialog import ProcessDialog
 from .process_output import ProcessOutput
 
 logger = logging.getLogger(__name__)
-
-# Status mapping from single-letter state codes (matches node.STATE_DISPLAY)
-STATE_NAME_MAP = {
-    "T": "Ready",
-    "R": "Running",
-    "F": "Failed",
-    "K": "Killed",
-}
-
-HOST_OFFLINE_THRESHOLD_SEC = 5
 
 # Color palette
 COLOR_GREEN = QColor(46, 204, 113)  # Running / Yes / Low usage
@@ -856,7 +847,7 @@ class MainWindow(QMainWindow):
     def _proc_status(self, proc) -> str:
         """Derive display status from the state code (single source of truth)."""
         state = getattr(proc, "state", "") or ""
-        return STATE_NAME_MAP.get(state.strip().upper(), "Ready")
+        return STATE_DISPLAY.get(state.strip().upper(), "Ready")
 
     def _mem_mb(self, proc) -> float:
         """Return memory usage in MB (mem_rss is published in kB by the node)."""

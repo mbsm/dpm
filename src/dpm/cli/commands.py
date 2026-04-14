@@ -176,9 +176,8 @@ def cmd_create(supervisor, args) -> int:
     supervisor.create_proc(name, args.cmd, args.group, host, args.auto_restart, args.realtime)
 
     if wait_for_telemetry(supervisor):
-        # Check if it appeared
-        time.sleep(0.5)
-        if (host, name) in supervisor.procs:
+        confirmed = wait_for_state(supervisor, name, host, target="T", timeout=3.0)
+        if confirmed:
             print(f"Created {name}@{host}")
             return 0
 
@@ -196,7 +195,7 @@ def cmd_delete(supervisor, args) -> int:
         return 1
 
     supervisor.stop_proc(name, host)
-    time.sleep(0.5)
+    wait_for_state(supervisor, name, host, not_target="R", timeout=3.0)
     supervisor.del_proc(name, host)
     confirmed = wait_for_proc_gone(supervisor, name, host)
     if confirmed:
@@ -376,7 +375,7 @@ def cmd_move(supervisor, args) -> int:
     # Step 2: Create on destination
     print(f"Creating {dst_name}@{dst_host}...")
     supervisor.create_proc(dst_name, exec_command, group, dst_host, auto_restart, realtime)
-    time.sleep(1.5)  # wait for agent to process + next telemetry broadcast
+    wait_for_state(supervisor, dst_name, dst_host, target="T", timeout=5.0)
 
     # Verify it appeared
     if (dst_host, dst_name) not in supervisor.procs:

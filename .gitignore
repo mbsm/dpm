@@ -40,6 +40,17 @@ saved/
 # Ignore local packaging installers output
 dist/
 
+# Debian build artifacts
+.pybuild/
+debian/.debhelper/
+debian/debhelper-build-stamp
+debian/files
+debian/*.substvars
+debian/*.debhelper
+debian/dpm-agent/
+debian/dpm-tools/
+debian/python3-dpm/
+
 # Keep repository metadata tracked
 # .github/
 
