@@ -37,6 +37,8 @@ MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
 # memory growth when a process produces output faster than the publish interval.
 MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches supervisor-side cap)
 
+from dpm.agent.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
+
 try:
     from dpm_msgs import (
         command_t,
@@ -515,6 +517,9 @@ class Agent:
             "stderr": "",
             "restart_count": 0,
             "last_restart_time": 0.0,
+            "cpuset": cpuset,
+            "cpu_limit": float(cpu_limit),
+            "mem_limit": int(mem_limit),
         }
         logging.info(
             "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
@@ -532,6 +537,7 @@ class Agent:
                 self.stop_process(process_name)
             # ensure no stale psutil handle
             self.processes[process_name]["ps_proc"] = None
+            cleanup_cgroup(process_name)
             del self.processes[process_name]
             logging.info("Delete Process: Deleted process: %s", process_name)
             self._save_registry()
@@ -665,6 +671,20 @@ class Agent:
                     )
                     self.processes[process_name]["errors"] = str(e)
 
+            # Apply cgroup resource limits (cpuset, CPU, memory)
+            _cpuset = proc_info.get("cpuset", "")
+            _cpu_limit = proc_info.get("cpu_limit", 0.0)
+            _mem_limit = proc_info.get("mem_limit", 0)
+            if (_cpuset or _cpu_limit > 0 or _mem_limit > 0) and cgroups_available():
+                try:
+                    setup_cgroup(process_name, proc.pid,
+                                 cpuset=_cpuset, cpu_limit=_cpu_limit, mem_limit=_mem_limit)
+                except OSError as e:
+                    logging.warning(
+                        "Start Process: cgroup setup failed for %s: %s (continuing without limits)",
+                        process_name, e,
+                    )
+
         except (OSError, ValueError, psutil.Error) as e:
             # Mark process as failed and store error
             error_msg = f"Failed to start process {process_name}: {e}"
@@ -752,6 +772,7 @@ class Agent:
         finally:
             proc_info["proc"] = None
             proc_info["ps_proc"] = None
+            cleanup_cgroup(process_name)
 
     def _handle_signal(self, signum, frame) -> None:
         logging.info("Received signal %s; shutting down.", signum)
