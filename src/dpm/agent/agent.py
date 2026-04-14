@@ -135,6 +135,13 @@ class Agent:
         self.host_procs_channel = self.config["host_procs_channel"]
         self.stop_timeout = self.config["stop_timeout"]
 
+        # Configurable stop signal (default SIGINT; SIGKILL escalation unchanged)
+        sig_name = self.config.get("stop_signal", "SIGINT")
+        self.stop_signal = getattr(signal, sig_name, None)
+        if self.stop_signal is None or self.stop_signal in (signal.SIGKILL, signal.SIGSTOP):
+            logging.warning("Invalid stop_signal %r, falling back to SIGINT.", sig_name)
+            self.stop_signal = signal.SIGINT
+
         self.monitor_timer = Timer(self.config["monitor_interval"])
         self.output_timer = Timer(self.config["output_interval"])
         self.host_status_timer = Timer(self.config["host_status_interval"])
@@ -693,9 +700,9 @@ class Agent:
 
         try:
             # Prefer process-group termination (handles spawned children)
-            sent = self._kill_process_group(proc.pid, signal.SIGTERM)
+            sent = self._kill_process_group(proc.pid, self.stop_signal)
             if not sent:
-                proc.terminate()
+                os.kill(proc.pid, self.stop_signal)
 
             proc.wait(timeout=self.stop_timeout)
             logging.info(
