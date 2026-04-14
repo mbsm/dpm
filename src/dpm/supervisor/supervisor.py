@@ -73,8 +73,10 @@ class Supervisor:
         # Per-process output state (proc_name -> _ProcOutputState)
         self._proc_output_states: Dict[str, _ProcOutputState] = {}
 
-        # Monotonic command sequence number (GUI thread only — no lock needed)
-        self._cmd_seq: int = 0
+        # Monotonic command sequence number (GUI thread only — no lock needed).
+        # Start from current microsecond timestamp so independent CLI sessions
+        # don't collide on seq=0 and trigger the agent's dedup filter.
+        self._cmd_seq: int = int(time.time() * 1e6)
 
         # LCM instances (separate for thread-safety)
         self.lc_sub: Optional[lcm.LCM] = None
