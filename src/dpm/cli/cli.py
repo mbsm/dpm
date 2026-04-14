@@ -120,6 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_create.add_argument("-g", "--group", default="", help="Process group")
     p_create.add_argument("--auto-restart", action="store_true")
     p_create.add_argument("--realtime", action="store_true")
+    p_create.add_argument("--work-dir", default="", help="Working directory")
+    p_create.add_argument("--cpuset", default="", help="CPU set cores (e.g. 0,1,2)")
+    p_create.add_argument("--cpu-limit", type=float, default=0.0,
+                          help="CPU limit in cores (e.g. 1.5)")
+    p_create.add_argument("--mem-limit", type=int, default=0,
+                          help="Memory limit in bytes")
 
     # dpm delete name@host
     p_delete = sub.add_parser("delete", help="Stop and remove a process")

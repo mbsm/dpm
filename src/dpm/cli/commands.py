@@ -173,7 +173,11 @@ def cmd_restart(supervisor, args) -> int:
 
 def cmd_create(supervisor, args) -> int:
     name, host = args.name, args.host
-    supervisor.create_proc(name, args.cmd, args.group, host, args.auto_restart, args.realtime)
+    supervisor.create_proc(
+        name, args.cmd, args.group, host, args.auto_restart, args.realtime,
+        work_dir=args.work_dir, cpuset=args.cpuset,
+        cpu_limit=args.cpu_limit, mem_limit=args.mem_limit,
+    )
 
     if wait_for_telemetry(supervisor):
         confirmed = wait_for_state(supervisor, name, host, target="T", timeout=3.0)
