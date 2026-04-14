@@ -416,3 +416,19 @@ def test_argparse_no_command():
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args([])
+
+
+def test_argparse_launch():
+    from dpm.cli.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["launch", "system.yaml"])
+    assert args.command == "launch"
+    assert args.path == "system.yaml"
+
+
+def test_argparse_shutdown():
+    from dpm.cli.cli import build_parser
+    parser = build_parser()
+    args = parser.parse_args(["shutdown", "system.yaml"])
+    assert args.command == "shutdown"
+    assert args.path == "system.yaml"
