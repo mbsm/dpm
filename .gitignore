@@ -57,3 +57,4 @@ debian/python3-dpm/
 # Keep other repo assets tracked
 # (uncomment below to ignore generated LCM bindings if you prefer)
 # src/dpm_msgs/
+.claude/worktrees/
