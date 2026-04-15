@@ -49,6 +49,9 @@ struct proc_info_t
     // realtime flag
     boolean realtime;
 
+    // CPU isolation flag
+    boolean isolated;
+
     // exit code
     int32_t exit_code;
 

@@ -120,6 +120,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_create.add_argument("-g", "--group", default="", help="Process group")
     p_create.add_argument("--auto-restart", action="store_true")
     p_create.add_argument("--realtime", action="store_true")
+    p_create.add_argument("--isolated", action="store_true",
+                          help="Isolate cpuset cores from general scheduler (requires --cpuset)")
     p_create.add_argument("--work-dir", default="", help="Working directory")
     p_create.add_argument("--cpuset", default="", help="CPU set cores (e.g. 0,1,2)")
     p_create.add_argument("--cpu-limit", type=float, default=0.0,

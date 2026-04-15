@@ -72,8 +72,9 @@ dpm start camera@jet1                   # start a process
 dpm stop camera@jet1                    # stop a process
 dpm restart camera@jet1                 # stop + start
 dpm create camera@jet1 --cmd "cam-node" -g perception --auto-restart
-dpm create slam@jet2 --cmd "slam-node" --work-dir /opt/robot --cpuset 0,1 --cpu-limit 2.0 --mem-limit 4294967296
+dpm create slam@jet2 --cmd "slam-node" --work-dir /opt/robot --cpuset 0,1 --isolated --cpu-limit 2.0 --mem-limit 4294967296
 dpm delete camera@jet1                  # stop + remove
+dpm move camera@jet1 @jet2              # move process to another host
 dpm start-group perception@jet1         # batch start
 dpm stop-group perception@jet1          # batch stop
 dpm load system.yaml                    # create processes from spec
@@ -81,8 +82,10 @@ dpm save snapshot.yaml                  # save current state
 dpm start-all                           # start every process
 dpm stop-all                            # stop every process
 dpm logs camera@jet1                    # stream output (Ctrl+C)
-dpm launch startup.yaml                 # ordered multi-host startup
-dpm shutdown startup.yaml               # reverse ordered shutdown
+dpm set-interval @jet1 2               # set telemetry interval (seconds)
+dpm set-persistence @jet1 on           # enable process persistence
+dpm launch startup.yaml                 # declarative dependency-based startup
+dpm shutdown startup.yaml               # reverse wave order shutdown
 ```
 
 No PyQt5 dependency — works on headless systems.
@@ -93,11 +96,13 @@ Source: `src/dpm/cli/`
 
 A PyQt5 desktop application. It uses the Supervisor to:
 
-- Display host cards with online/offline status, CPU, and memory usage
-- Show a process tree grouped by process group
-- Start/stop/edit/delete processes via context menus
-- Stream live process output in modeless windows
+- Display host cards with online/offline status, CPU/memory usage, process counts, persistence mode, and telemetry interval
+- Right-click host cards to toggle persistence or change telemetry interval
+- Show a process tree grouped by process group with columns for status, CPU, memory, auto-restart, CPU isolation, and priority
+- Start/stop/edit/move/delete processes via context menus
+- Stream live process output in modeless windows with a working clear button
 - Save/load process specs as YAML files
+- Launch/shutdown via declarative launch files with a live progress dialog
 
 The Supervisor is designed to be UI-agnostic — a CLI, web frontend, or any custom client could use the same Supervisor class.
 
@@ -149,12 +154,12 @@ A manual `dpm start` clears the counter and resumes normal operation.
 
 ## Command Actions
 
-- `create_process` — register a process definition (stops existing if running)
+- `create_process` — register a process definition (stops existing if running); supports `isolated` flag for CPU partition isolation
 - `start_process` — launch the process (any non-RUNNING state; clears SUSPENDED counter)
 - `stop_process` — configurable signal (default SIGINT) → wait → SIGKILL if needed
 - `delete_process` — stop + remove from registry + cleanup cgroup
 - `start_group` / `stop_group` — batch operations by group name
-- `set_interval` / `set_persistence` — runtime agent configuration
+- `set_interval` / `set_persistence` — runtime agent configuration (persisted across restarts when persistence is enabled)
 
 ## Message Flow
 
@@ -243,49 +248,105 @@ Processes can be assigned dedicated CPU cores and resource limits using cgroups 
 ```bash
 dpm create slam@jet1 --cmd "slam-node" \
     --cpuset 2,3 \
+    --isolated \
     --cpu-limit 2.0 \
     --mem-limit 4294967296
 ```
 
 | Flag | cgroup file | Example | Description |
 |------|-------------|---------|-------------|
-| `--cpuset` | `cpuset.cpus` | `0,1` | Pin to specific cores (true isolation) |
+| `--cpuset` | `cpuset.cpus` | `0,1` | Pin to specific cores (CPU affinity) |
+| `--isolated` | `cpuset.cpus.partition` | — | Remove cores from general scheduler (true isolation) |
 | `--cpu-limit` | `cpu.max` | `1.5` | CPU bandwidth limit in cores |
 | `--mem-limit` | `memory.max` | `4294967296` | Memory limit in bytes (4 GB) |
+
+### CPU isolation
+
+The `--isolated` flag reserves cores exclusively for a process:
+
+- **CPU affinity** — the process is pinned to the specified cores via `cpuset.cpus`
+- **Exclusive reservation** — no other isolated process can claim the same cores (validated at start time)
+- **Realtime scheduling** — combine with `--realtime` for `SCHED_FIFO` priority on the pinned cores
+
+This gives low-preemption execution suitable for latency-sensitive processes like motion controllers or localization nodes.
+
+For full kernel-level scheduler isolation (removing cores from the general scheduler entirely), add `isolcpus=<cores>` to the kernel command line. For example, `isolcpus=20-23` reserves cores 20-23 at boot. DPM's cpuset affinity then ensures only your processes use those cores.
 
 The agent creates cgroup directories under `/sys/fs/cgroup/dpm/<process_name>/` and cleans them up on stop/delete.
 
 **Requirements:** cgroups v2 unified hierarchy and `Delegate=yes` in the systemd service unit (included in the dpm-agent package). On dev machines without cgroup access, processes run without limits (graceful degradation).
 
-## Launch Scripts
+## Launch Files
 
-For ordered multi-host startup, use YAML launch scripts:
+Launch files use a declarative dependency graph to orchestrate multi-host startup and
+shutdown. Groups start in parallel waves resolved from their dependencies.
+
+### Syntax
 
 ```yaml
 name: "AGV1 Full System"
-timeout: 30
+timeout: 30                  # default wait timeout per group (seconds)
 
-steps:
-  - start: lidar_driver@sensor-host
-  - start: camera_driver@sensor-host
-  - wait_running:
-      targets: [lidar_driver@sensor-host, camera_driver@sensor-host]
-      timeout: 15
-  - start: slam@perception-host
-  - wait_running:
-      targets: [slam@perception-host]
-  - start: planner@planning-host
-  - start: controller@planning-host
+# Optional: create processes before launching (skipped on shutdown)
+processes:
+  - name: VLP 16 Node
+    host: sensor-host
+    cmd: /opt/agv/bin/vlp16_node
+    group: Sensors
+  - name: SLAM Node
+    host: perception-host
+    cmd: /opt/agv/bin/slam_node
+    group: Perception
+  # ...
+
+# Dependency graph — groups start in parallel where dependencies allow
+groups:
+  Sensors: {}                          # no deps → starts first
+  Input: {}                            # no deps → starts first
+  Simulation: {}                       # no deps → starts first
+  Perception:
+    requires: [Sensors]                # hard dep: won't start if Sensors fails
+  Planning:
+    requires: [Perception]             # hard dep chain: Sensors → Perception → Planning
+    after: [Input]                     # soft dep: waits for Input, but starts anyway if it fails
 ```
+
+### Dependency types
+
+| Directive | Meaning |
+|-----------|---------|
+| `requires: [A, B]` | Hard dependency + ordering. If A or B fail to start, this group and all its dependents fail. |
+| `after: [A, B]` | Pure ordering. Wait for A and B before starting, but continue even if they fail. |
+
+Both accept a list of group names. A group with neither starts immediately (wave 1).
+`requires` implies `after` — no need to specify both.
+
+### Execution
 
 ```bash
-dpm launch startup.yaml      # execute steps top-to-bottom
-dpm shutdown startup.yaml    # reverse: start→stop, wait_running→wait_stopped
+dpm launch system.yaml       # resolve graph → start in parallel waves
+dpm shutdown system.yaml     # reverse wave order → stop in parallel
 ```
 
-Step types: `start`, `stop`, `create`, `wait_running`, `wait_stopped`, `sleep`.
+**Launch** resolves the dependency graph into waves via topological sort:
 
-On failure, execution stops and the operator decides what to do (no automatic rollback).
+```
+Wave 1: Sensors, Input, Simulation    (no dependencies — parallel)
+Wave 2: Perception                    (requires Sensors — now running)
+Wave 3: Planning                      (requires Perception, after Input — both ready)
+```
+
+Each wave starts all its groups in parallel, then waits for every process in those
+groups to reach Running before proceeding to the next wave.
+
+**Shutdown** reverses the wave order: Planning stops first, then Perception, then
+Sensors/Input/Simulation in parallel.
+
+### Failure behavior
+
+- If a group in a `requires` chain fails, all downstream groups are aborted.
+- If a group in an `after` chain fails, dependent groups continue with a warning.
+- On shutdown, timeouts produce warnings but don't stop the shutdown sequence.
 
 ## Log Paths
 
@@ -355,7 +416,7 @@ sudo apt install ./dpm-tools_0.1.0_all.deb
 3. Adds `dpm` user to `video`, `render`, `plugdev` groups (GPU + USB camera access)
 4. Installs config to `/etc/dpm/dpm.yaml` (preserved on upgrade)
 5. Installs systemd unit `dpm-agent.service`
-6. Creates `/var/log/dpm/` owned by `dpm:dpm`
+6. Creates `/var/log/dpm/` and `/var/lib/dpm/` owned by `dpm:dpm`
 7. Runs `systemctl daemon-reload && systemctl enable --now dpm-agent`
 
 After install, the agent is running:
@@ -403,7 +464,7 @@ src/
       commands.py   # Command handlers
       formatting.py # Table rendering
       wait.py       # Polling helpers
-      launch.py     # YAML launch script parser and executor
+      launch.py     # Declarative launch system with dependency graph
     gui/            # PyQt5 GUI (dpm-gui)
       main.py       # Application entry point
       main_window.py

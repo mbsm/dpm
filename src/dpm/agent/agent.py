@@ -37,7 +37,7 @@ MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
 # memory growth when a process produces output faster than the publish interval.
 MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches supervisor-side cap)
 
-from dpm.agent.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
+from dpm.agent.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup, _resolve_cgroup_base
 
 try:
     from dpm_msgs import (
@@ -188,8 +188,14 @@ class Agent:
             self._persist,
         )
 
+        # Initialize cgroups early — moves agent PID to a leaf cgroup and
+        # enables controllers before any child processes are spawned.
+        _resolve_cgroup_base()
+
+        # Check persisted settings first — persistence may have been enabled
+        # at runtime in a previous session even if the config file says otherwise.
+        self._load_settings()
         if self._persist:
-            self._load_settings()
             self._load_registry()
 
     def _init_lcm(self):
@@ -335,6 +341,7 @@ class Agent:
                 "group": info.get("group", ""),
                 "auto_restart": info["auto_restart"],
                 "realtime": info["realtime"],
+                "isolated": info.get("isolated", False),
                 "work_dir": info.get("work_dir", ""),
                 "cpuset": info.get("cpuset", ""),
                 "cpu_limit": info.get("cpu_limit", 0.0),
@@ -346,11 +353,10 @@ class Agent:
         except OSError as e:
             logging.error("Failed to persist process registry: %s", e)
 
-    def _save_settings(self) -> None:
-        """Save runtime settings overrides to disk."""
-        if not self._persist:
-            return
+    def _save_settings_with_persist(self, persist_value: bool) -> None:
+        """Write settings with an explicit persist flag value."""
         settings = {
+            "persist": persist_value,
             "monitor_interval": self.monitor_timer.period,
             "output_interval": self.output_timer.period,
             "host_status_interval": self.host_status_timer.period,
@@ -362,6 +368,12 @@ class Agent:
             logging.debug("Persisted settings to %s", settings_path)
         except OSError as e:
             logging.error("Failed to persist settings: %s", e)
+
+    def _save_settings(self) -> None:
+        """Save runtime settings overrides to disk."""
+        if not self._persist:
+            return
+        self._save_settings_with_persist(True)
 
     def _load_registry(self) -> None:
         """Load process definitions from disk on startup."""
@@ -397,6 +409,7 @@ class Agent:
                 cpuset=str(spec.get("cpuset", "")),
                 cpu_limit=float(spec.get("cpu_limit", 0.0)),
                 mem_limit=int(spec.get("mem_limit", 0)),
+                isolated=bool(spec.get("isolated", False)),
             )
             loaded += 1
             if spec.get("auto_restart", False):
@@ -421,6 +434,11 @@ class Agent:
             return
         if not isinstance(settings, dict):
             return
+
+        # Restore the persist flag before anything else — it may have been
+        # enabled at runtime in a previous session.
+        if settings.get("persist", False):
+            self._persist = True
 
         changed = []
         for key, timer in [
@@ -468,6 +486,7 @@ class Agent:
                 msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group,
                 work_dir=msg.work_dir, cpuset=msg.cpuset,
                 cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
+                isolated=msg.isolated,
             )
 
         elif action == "start_process":
@@ -496,7 +515,7 @@ class Agent:
 
     def create_process(
         self, process_name, exec_command, auto_restart, realtime, group,
-        work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
+        work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0, isolated=False,
     ) -> None:
         """Register a process definition without starting it."""
         existing = self.processes.get(process_name)
@@ -513,6 +532,7 @@ class Agent:
             "exec_command": exec_command,
             "auto_restart": bool(auto_restart),
             "realtime": bool(realtime),
+            "isolated": bool(isolated),
             "group": group,
             "work_dir": work_dir,
             "cpuset": cpuset,
@@ -525,9 +545,6 @@ class Agent:
             "stderr": "",
             "restart_count": 0,
             "last_restart_time": 0.0,
-            "cpuset": cpuset,
-            "cpu_limit": float(cpu_limit),
-            "mem_limit": int(mem_limit),
         }
         logging.info(
             "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
@@ -679,15 +696,17 @@ class Agent:
                     )
                     self.processes[process_name]["errors"] = str(e)
 
-            # Apply cgroup resource limits (cpuset, CPU, memory)
+            # Apply cgroup resource limits (cpuset, CPU, memory, isolation)
             _cpuset = proc_info.get("cpuset", "")
             _cpu_limit = proc_info.get("cpu_limit", 0.0)
             _mem_limit = proc_info.get("mem_limit", 0)
+            _isolated = proc_info.get("isolated", False)
             if (_cpuset or _cpu_limit > 0 or _mem_limit > 0) and cgroups_available():
                 try:
                     setup_cgroup(process_name, proc.pid,
-                                 cpuset=_cpuset, cpu_limit=_cpu_limit, mem_limit=_mem_limit)
-                except OSError as e:
+                                 cpuset=_cpuset, cpu_limit=_cpu_limit,
+                                 mem_limit=_mem_limit, isolated=_isolated)
+                except (OSError, ValueError) as e:
                     logging.warning(
                         "Start Process: cgroup setup failed for %s: %s (continuing without limits)",
                         process_name, e,
@@ -1057,6 +1076,7 @@ class Agent:
             msg_proc.exec_command = proc_info["exec_command"]
             msg_proc.auto_restart = proc_info["auto_restart"]
             msg_proc.realtime = proc_info["realtime"]
+            msg_proc.isolated = proc_info.get("isolated", False)
             msg_proc.exit_code = int(proc_info["exit_code"])
 
             proc = proc_info["proc"]
@@ -1139,6 +1159,9 @@ class Agent:
             self._save_settings()
             logging.info("Persistence enabled (path: %s)", self._persist_path)
         elif val in ("off", "false", "0"):
+            # Temporarily keep _persist on to write the updated settings file,
+            # then disable it.
+            self._save_settings_with_persist(False)
             self._persist = False
             logging.info("Persistence disabled")
         else:

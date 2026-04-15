@@ -26,6 +26,10 @@ struct command_t
     // realtime priority flag
     boolean realtime;
 
+    // CPU isolation flag — when true with cpuset, cores are removed from the
+    // general scheduler via cpuset.cpus.partition=isolated (cgroups v2)
+    boolean isolated;
+
     // working directory for the process (empty = inherit agent cwd)
     string work_dir;
 

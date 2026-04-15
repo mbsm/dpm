@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 import time
 
 from PyQt5.QtCore import QSize, Qt, QTimer
@@ -9,8 +10,10 @@ from PyQt5.QtGui import QBrush, QColor, QFontMetrics, QPalette
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QListWidget,
@@ -18,6 +21,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -59,10 +63,18 @@ class HostCard(QFrame):
         self.cpu = QLabel("", self)
         self.cpu.setObjectName("StatLabel")
         self.cpu.setTextFormat(Qt.RichText)
+        self.procs_label = QLabel("", self)
+        self.procs_label.setObjectName("StatLabel")
+        self.procs_label.setTextFormat(Qt.RichText)
+        self.persist = QLabel("", self)
+        self.persist.setObjectName("StatLabel")
+        self.persist.setTextFormat(Qt.RichText)
         self.v.addWidget(self.title)
         self.v.addWidget(self.status)
         self.v.addWidget(self.mem)
         self.v.addWidget(self.cpu)
+        self.v.addWidget(self.procs_label)
+        self.v.addWidget(self.persist)
         self.set_theme(dark=False)
 
     def set_theme(self, dark: bool):
@@ -71,7 +83,7 @@ class HostCard(QFrame):
                 #HostCard {
                     border: 1px solid #444;
                     border-radius: 4px;
-                    padding: 8px;
+                    padding: 6px;
                     background: #2b2b2b;
                 }
                 #HostTitle { font-weight: 600; color: #ffffff; font-size: 12px; }
@@ -80,17 +92,19 @@ class HostCard(QFrame):
         else:
             self.setStyleSheet("""
                 #HostCard {
-                    border: 1px solid #000;       /* black border */
+                    border: 1px solid #000;
                     border-radius: 4px;
-                    padding: 8px;
-                    background: #ffffff;          /* white card */
+                    padding: 6px;
+                    background: #ffffff;
                 }
                 #HostTitle { font-weight: 600; color: #000; font-size: 12px; }
-                #StatLabel { color: #000; font-size: 10px; }  /* smaller stats text */
+                #StatLabel { color: #000; font-size: 10px; }
             """)
 
     def set_data(
-        self, host: str, online: bool, cpu_pct: int, mem_pct: int, usage_color_fn
+        self, host: str, online: bool, cpu_pct: int, mem_pct: int,
+        running: int, total: int, persist: bool, interval: float,
+        usage_color_fn,
     ):
         self.title.setText(host)
         self.status.setText("Online" if online else "Offline")
@@ -100,13 +114,25 @@ class HostCard(QFrame):
 
         mem_color = usage_color_fn(mem_pct).name()
         cpu_color = usage_color_fn(cpu_pct).name()
-        # Color only the numbers using rich text
         self.mem.setText(
-            f"Mem usage: <span style='color:{mem_color}'>{mem_pct}%</span>"
+            f"Mem: <span style='color:{mem_color}'>{mem_pct}%</span>"
         )
         self.cpu.setText(
-            f"Cpu usage: <span style='color:{cpu_color}'>{cpu_pct}%</span>"
+            f"Cpu: <span style='color:{cpu_color}'>{cpu_pct}%</span>"
         )
+        if total > 0:
+            run_color = COLOR_GREEN.name() if running > 0 else COLOR_GRAY.name()
+            self.procs_label.setText(
+                f"Procs: <span style='color:{run_color}'>{running}</span>/{total}"
+            )
+        else:
+            self.procs_label.setText("Procs: 0")
+        if persist:
+            self.persist.setText(
+                f"<span style='color:{COLOR_GREEN.name()}'>Autonomous</span> | {interval:.0f}s"
+            )
+        else:
+            self.persist.setText(f"Persistence off | {interval:.0f}s")
 
 
 class MainWindow(QMainWindow):
@@ -153,6 +179,18 @@ class MainWindow(QMainWindow):
         load_action.triggered.connect(self.load_processes_from_file)
         file_menu.addAction(load_action)
 
+        file_menu.addSeparator()
+
+        # Launch
+        launch_action = QAction("Laun&ch...", self)
+        launch_action.triggered.connect(self._launch_file)
+        file_menu.addAction(launch_action)
+
+        # Shutdown
+        shutdown_action = QAction("Shut&down...", self)
+        shutdown_action.triggered.connect(self._shutdown_file)
+        file_menu.addAction(shutdown_action)
+
         settings_menu = menu_bar.addMenu("&Settings")
         lcm_url_action = QAction("Change &LCM URL...", self)
         lcm_url_action.triggered.connect(self._change_lcm_url)
@@ -176,39 +214,54 @@ class MainWindow(QMainWindow):
         act_proc_delete.triggered.connect(self.delete_process)
         process_menu.addAction(act_proc_delete)
 
-        # Main layout
+        # Main layout with splitter: hosts (compact) | processes (expands)
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
+        layout.setContentsMargins(4, 4, 4, 4)
 
+        splitter = QSplitter(Qt.Vertical)
+        layout.addWidget(splitter)
+
+        # --- Hosts panel ---
+        hosts_panel = QWidget()
+        hosts_layout = QVBoxLayout(hosts_panel)
+        hosts_layout.setContentsMargins(0, 0, 0, 0)
+        hosts_layout.setSpacing(2)
         self.hosts_label = QLabel("Hosts")
-        layout.addWidget(self.hosts_label)
+        hosts_layout.addWidget(self.hosts_label)
 
         self.hosts_list = QListWidget()
-
-        # Display hosts as cards in a wrapping grid
         self.hosts_list.setViewMode(self.hosts_list.IconMode)
         self.hosts_list.setResizeMode(self.hosts_list.Adjust)
         self.hosts_list.setMovement(self.hosts_list.Static)
-        self.hosts_list.setSpacing(12)
+        self.hosts_list.setSpacing(8)
         self.hosts_list.setWordWrap(True)
+        self.hosts_list.setStyleSheet("QListWidget { padding: 4px; }")
+        # Right-click context menu on host cards
+        self.hosts_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.hosts_list.customContextMenuRequested.connect(
+            self._show_host_context_menu
+        )
 
-        # Add padding around the entire grid of host cards
-        self.hosts_list.setStyleSheet("QListWidget { padding: 10px; }")
-
-        # Fix each card’s allocated area; width will be recomputed to fit hostnames
-        self._host_card_size = QSize(96, 96)  # initial, will auto-adjust
+        self._host_card_size = QSize(96, 126)
         self.hosts_list.setGridSize(self._host_card_size)
-        layout.addWidget(self.hosts_list)
+        hosts_layout.addWidget(self.hosts_list)
+        splitter.addWidget(hosts_panel)
 
+        # --- Processes panel ---
+        proc_panel = QWidget()
+        proc_layout = QVBoxLayout(proc_panel)
+        proc_layout.setContentsMargins(0, 0, 0, 0)
+        proc_layout.setSpacing(2)
         self.processes_label = QLabel("Processes")
-        layout.addWidget(self.processes_label)
+        proc_layout.addWidget(self.processes_label)
 
-        # Tree table: Group/Proc, Host, Status, CPU, MEM, Auto, Priority
+        # Tree table: Group/Proc, Host, Status, CPU, MEM, Auto, Iso, Priority
         self.processes_tree = QTreeWidget()
-        self.processes_tree.setColumnCount(7)
+        self.processes_tree.setColumnCount(8)
         self.processes_tree.setHeaderLabels(
-            ["Group/Proc", "Host", "Status", "CPU", "MEM (MB)", "Auto", "Priority"]
+            ["Group/Proc", "Host", "Status", "CPU", "MEM (MB)", "Auto", "Iso", "Priority"]
         )
         self.processes_tree.setRootIsDecorated(True)
         self.processes_tree.setAlternatingRowColors(True)
@@ -217,14 +270,19 @@ class MainWindow(QMainWindow):
         self.processes_tree.setColumnWidth(2, 120)
         self.processes_tree.setColumnWidth(3, 80)
         self.processes_tree.setColumnWidth(4, 90)
-        self.processes_tree.setColumnWidth(5, 80)
-        self.processes_tree.setColumnWidth(6, 80)
-        # Right-click context menu on process tree
+        self.processes_tree.setColumnWidth(5, 50)
+        self.processes_tree.setColumnWidth(6, 40)
+        self.processes_tree.setColumnWidth(7, 80)
         self.processes_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.processes_tree.customContextMenuRequested.connect(
             self._show_process_context_menu
         )
-        layout.addWidget(self.processes_tree)
+        proc_layout.addWidget(self.processes_tree)
+        splitter.addWidget(proc_panel)
+
+        # Give most space to the process panel
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
 
         # Double-click to edit (process rows only)
         self.processes_tree.itemDoubleClicked.connect(
@@ -403,12 +461,29 @@ class MainWindow(QMainWindow):
                 self._host_item_map[host] = (item, card)
             else:
                 item, card = tup
+            # Persistence and interval
+            persist = bool(getattr(info, "persist", False))
+            interval = float(getattr(info, "report_interval", 1.0) or 1.0)
+
+            # Count processes on this host
+            procs = self.supervisor.procs
+            host_procs = [(h, n) for (h, n), p in procs.items() if h == host]
+            total = len(host_procs)
+            running = sum(
+                1 for h, n in host_procs
+                if getattr(procs.get((h, n)), "state", "") == "R"
+            )
+
             # Update content only
             card.set_data(
                 host,
                 online=not offline,
                 cpu_pct=cpu_pct,
                 mem_pct=mem_pct,
+                running=running,
+                total=total,
+                persist=persist,
+                interval=interval,
                 usage_color_fn=self._usage_color,
             )
 
@@ -541,9 +616,10 @@ class MainWindow(QMainWindow):
         item.setText(1, g_host)
         item.setText(2, g_status)
         item.setText(3, group_cpu_str)
-        item.setText(4, group_mem_str)  # <-- 1 decimal
+        item.setText(4, group_mem_str)
         item.setText(5, g_auto)
-        item.setText(6, g_prio)
+        item.setText(6, "")
+        item.setText(7, g_prio)
 
         item.setData(0, Qt.UserRole, {"type": "group", "name": group_name})
         item.setForeground(2, QBrush(self._status_color(g_status)))
@@ -555,18 +631,18 @@ class MainWindow(QMainWindow):
         cpu_str = f"{cpu * 100:.1f}%"
         mem_mb = self._mem_mb(proc)
         auto = "Yes" if getattr(proc, "auto_restart", False) else "No"
+        iso = "Yes" if getattr(proc, "isolated", False) else ""
         host_name = getattr(proc, "hostname", "") or ""
-        prio_str = self._proc_priority(
-            proc
-        )  # <-- will now show '-' if not running, and annotate RT
+        prio_str = self._proc_priority(proc)
 
         item.setText(0, proc.name)
         item.setText(1, host_name)
         item.setText(2, status)
         item.setText(3, cpu_str)
-        item.setText(4, f"{mem_mb:.1f}")  # <-- 1 decimal
+        item.setText(4, f"{mem_mb:.1f}")
         item.setText(5, auto)
-        item.setText(6, prio_str)
+        item.setText(6, iso)
+        item.setText(7, prio_str)
 
         item.setData(
             0,
@@ -575,6 +651,8 @@ class MainWindow(QMainWindow):
         )
         item.setForeground(2, QBrush(self._status_color(status)))
         item.setForeground(5, QBrush(self._auto_color(auto)))
+        if iso:
+            item.setForeground(6, QBrush(COLOR_GREEN))
 
     def _proc_priority(self, proc) -> str:
         """
@@ -728,6 +806,67 @@ class MainWindow(QMainWindow):
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
+
+    def _move_proc_direct(self, proc_name: str, host_name: str = None):
+        if not proc_name:
+            QMessageBox.warning(self, "Warning", "No process selected.")
+            return
+        src_host = host_name or self._selected_host()
+        if not src_host:
+            QMessageBox.warning(self, "Warning", "No host selected.")
+            return
+
+        # Offer available hosts (excluding the current one)
+        available = sorted(h for h in self.supervisor.hosts if h != src_host)
+        if not available:
+            QMessageBox.information(self, "Move", "No other hosts available.")
+            return
+
+        dst_host, ok = QInputDialog.getItem(
+            self, "Move Process",
+            f"Move '{proc_name}' from {src_host} to:",
+            available, 0, False,
+        )
+        if not ok or not dst_host:
+            return
+
+        # Find the source proc to copy its spec
+        src_proc = None
+        for p in self.supervisor.procs.values():
+            if p.name == proc_name and getattr(p, "hostname", "") == src_host:
+                src_proc = p
+                break
+        if src_proc is None:
+            QMessageBox.warning(self, "Warning", f"Process '{proc_name}@{src_host}' not found.")
+            return
+
+        try:
+            exec_command = getattr(src_proc, "exec_command", "")
+            group = getattr(src_proc, "group", "")
+            auto_restart = bool(getattr(src_proc, "auto_restart", False))
+            realtime = bool(getattr(src_proc, "realtime", False))
+            isolated = bool(getattr(src_proc, "isolated", False))
+            was_running = getattr(src_proc, "state", "") == "R"
+
+            if was_running:
+                self.supervisor.stop_proc(proc_name, src_host)
+
+            self.supervisor.create_proc(
+                proc_name, exec_command, group, dst_host,
+                auto_restart, realtime, isolated=isolated,
+            )
+
+            if was_running:
+                self.supervisor.start_proc(proc_name, dst_host)
+
+            self.supervisor.del_proc(proc_name, src_host)
+            self.refresh_processes_in_place()
+            QMessageBox.information(
+                self, "Move",
+                f"Moved {proc_name}: {src_host} → {dst_host}",
+            )
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Move failed: {e}")
 
     def new_process(self):
         dlg = ProcessDialog(self.supervisor, None)  # creation mode
@@ -917,6 +1056,12 @@ class MainWindow(QMainWindow):
             act_view.triggered.connect(lambda: self._view_output_direct(proc_name))
             menu.addAction(act_view)
 
+            act_move = QAction("Move...", self)
+            act_move.triggered.connect(
+                lambda: self._move_proc_direct(proc_name, host_name)
+            )
+            menu.addAction(act_move)
+
             act_delete = QAction("Delete...", self)
             act_delete.triggered.connect(
                 lambda: self._delete_proc_direct(proc_name, host_name)
@@ -1007,3 +1152,201 @@ class MainWindow(QMainWindow):
             return
 
         self._edit_proc_direct(proc_name)
+
+    # --- Host card context menu ---
+    def _show_host_context_menu(self, pos):
+        item = self.hosts_list.itemAt(pos)
+        if not item:
+            return
+        host = item.data(Qt.UserRole)
+        if not host:
+            return
+
+        menu = QMenu(self)
+
+        # Persistence toggle
+        info = self.supervisor.hosts.get(host)
+        persist = bool(getattr(info, "persist", False)) if info else False
+
+        act_persist = QAction(
+            "Disable Persistence" if persist else "Enable Persistence", self
+        )
+        act_persist.triggered.connect(lambda: self._toggle_persistence(host, not persist))
+        menu.addAction(act_persist)
+
+        # Telemetry interval
+        act_interval = QAction("Set Telemetry Interval...", self)
+        act_interval.triggered.connect(lambda: self._set_host_interval(host))
+        menu.addAction(act_interval)
+
+        menu.exec_(self.hosts_list.viewport().mapToGlobal(pos))
+
+    def _toggle_persistence(self, host: str, enable: bool):
+        try:
+            self.supervisor.set_persistence(host, enable)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to set persistence: {e}")
+
+    def _set_host_interval(self, host: str):
+        info = self.supervisor.hosts.get(host)
+        current = float(getattr(info, "report_interval", 1.0) or 1.0) if info else 1.0
+        val, ok = QInputDialog.getDouble(
+            self, "Telemetry Interval",
+            f"Set telemetry interval for {host} (seconds):",
+            current, 0.05, 60.0, 2,
+        )
+        if ok:
+            try:
+                self.supervisor.set_interval(host, val)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to set interval: {e}")
+
+    # --- Launch / Shutdown ---
+    def _launch_file(self):
+        self._run_launch_file(reverse=False)
+
+    def _shutdown_file(self):
+        self._run_launch_file(reverse=True)
+
+    def _run_launch_file(self, reverse: bool):
+        from dpm.cli.launch import parse_launch_file, resolve_waves
+
+        mode = "Shutdown" if reverse else "Launch"
+        fname, _ = QFileDialog.getOpenFileName(
+            self, f"Select {mode} File", "", "YAML Files (*.yml *.yaml)"
+        )
+        if not fname:
+            return
+
+        try:
+            script = parse_launch_file(fname)
+            waves = resolve_waves(script["groups"])
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Invalid launch file: {e}")
+            return
+
+        if reverse:
+            waves = list(reversed(waves))
+
+        # Shared state between worker thread and GUI timer
+        self._launch_status = {"text": f"{mode}: {script['name']}\n\nStarting...",
+                               "done": False, "error": False, "result": ""}
+        self._launch_mode = mode
+
+        # Build progress dialog
+        dlg = QDialog(self)
+        dlg.setWindowTitle(mode)
+        dlg.setMinimumWidth(400)
+        dlg_layout = QVBoxLayout(dlg)
+        dlg_label = QLabel(self._launch_status["text"])
+        dlg_label.setWordWrap(True)
+        dlg_layout.addWidget(dlg_label)
+
+        # Poll timer to update label from thread state
+        poll_timer = QTimer(dlg)
+        def _poll():
+            dlg_label.setText(self._launch_status["text"])
+            if self._launch_status["done"]:
+                poll_timer.stop()
+                dlg.accept()
+        poll_timer.timeout.connect(_poll)
+        poll_timer.start(200)
+
+        # Start worker thread
+        thread = threading.Thread(
+            target=self._launch_worker,
+            args=(script, waves, reverse),
+            daemon=True,
+        )
+        thread.start()
+
+        # exec_ blocks here but the poll timer keeps the dialog responsive
+        dlg.exec_()
+        poll_timer.stop()
+
+        self.refresh_processes_in_place()
+
+        result = self._launch_status["result"]
+        if self._launch_status["error"]:
+            QMessageBox.critical(self, f"{mode} Failed", result)
+        elif result:
+            QMessageBox.warning(self, f"{mode} Complete", result)
+        else:
+            QMessageBox.information(self, mode, f"{mode} complete.")
+
+    def _launch_worker(self, script, waves, reverse):
+        """Runs in a background thread — updates self._launch_status dict."""
+        from dpm.cli.launch import (
+            _start_group, _stop_group,
+            _wait_group_running, _wait_group_stopped, _create_processes,
+        )
+
+        mode = "Shutdown" if reverse else "Launch"
+        groups = script["groups"]
+        timeout = script["timeout"]
+        total_waves = len(waves)
+        name = script["name"]
+        status = self._launch_status
+
+        try:
+            if not reverse and script["processes"]:
+                status["text"] = f"{mode}: {name}\n\nCreating processes..."
+                errors = _create_processes(self.supervisor, script["processes"])
+                if errors:
+                    status["result"] = f"{errors} process(es) failed to create."
+                    status["error"] = True
+                    status["done"] = True
+                    return
+                time.sleep(1)
+
+            failed_groups = []
+            for i, wave in enumerate(waves):
+                wave_label = ", ".join(wave)
+                lines = [f"{mode}: {name}\n"]
+                for j in range(i):
+                    prev_label = ", ".join(waves[j])
+                    lines.append(f"  Wave {j+1}/{total_waves}: {prev_label}  done")
+                lines.append(f"  Wave {i+1}/{total_waves}: {wave_label}  ...")
+                for j in range(i + 1, total_waves):
+                    next_label = ", ".join(waves[j])
+                    lines.append(f"  Wave {j+1}/{total_waves}: {next_label}")
+                status["text"] = "\n".join(lines)
+
+                if reverse:
+                    for g in wave:
+                        _stop_group(self.supervisor, g)
+                    for g in wave:
+                        ok, failed = _wait_group_stopped(self.supervisor, g, timeout)
+                        if not ok:
+                            failed_groups.append((g, failed))
+                else:
+                    for g in wave:
+                        _start_group(self.supervisor, g)
+                    for g in wave:
+                        ok, failed = _wait_group_running(self.supervisor, g, timeout)
+                        if not ok:
+                            dependents = []
+                            for later_wave in waves[i + 1:]:
+                                for lg in later_wave:
+                                    if g in groups[lg].get("requires", []):
+                                        dependents.append(lg)
+                            if dependents:
+                                status["result"] = (
+                                    f"Group '{g}' failed to start.\n"
+                                    f"Not running: {', '.join(failed)}\n\n"
+                                    f"Required by: {', '.join(dependents)}"
+                                )
+                                status["error"] = True
+                                status["done"] = True
+                                return
+                            failed_groups.append((g, failed))
+
+            if failed_groups:
+                details = "\n".join(f"  {g}: {', '.join(f)}" for g, f in failed_groups)
+                status["result"] = f"{mode} finished with warnings:\n{details}"
+            status["done"] = True
+
+        except Exception as e:
+            status["result"] = str(e)
+            status["error"] = True
+            status["done"] = True

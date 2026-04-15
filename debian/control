@@ -20,6 +20,7 @@ Depends:
  ${misc:Depends},
  python3-yaml,
  python3-psutil,
+Recommends:
  python3-lcm,
 Description: Distributed Process Manager - Python library
  DPM Python packages: agent, supervisor, CLI, GUI, and LCM message

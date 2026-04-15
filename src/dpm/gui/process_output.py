@@ -6,7 +6,7 @@ import logging
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtGui import QFont, QTextCursor
-from PyQt5.QtWidgets import QDialog, QTextEdit, QVBoxLayout
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBoxLayout
 
 
 class ProcessOutput(QDialog):
@@ -25,6 +25,13 @@ class ProcessOutput(QDialog):
         self.text.setFont(QFont("Monospace"))
         layout.addWidget(self.text)
 
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        self.clear_button = QPushButton("Clear")
+        self.clear_button.clicked.connect(self._clear_output)
+        btn_layout.addWidget(self.clear_button)
+        layout.addLayout(btn_layout)
+
         # State for delta fetch (avoids big copies)
         self._last_gen = -1
         self._last_len = 0
@@ -37,6 +44,13 @@ class ProcessOutput(QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_from_supervisor)
         self._timer.start(500)
+
+    def _clear_output(self) -> None:
+        self.text.clear()
+        if self.supervisor is not None and hasattr(self.supervisor, "clear_proc_output"):
+            self.supervisor.clear_proc_output(self.proc_name)
+        self._last_gen = -1
+        self._last_len = 0
 
     def _refresh_from_supervisor(self) -> None:
         if self.supervisor is None:

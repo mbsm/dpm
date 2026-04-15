@@ -31,6 +31,7 @@ class ProcessDialog(QDialog):
         self.host_input = QLineEdit()
         self.auto_restart_checkbox = QCheckBox()
         self.realtime_checkbox = QCheckBox()
+        self.isolated_checkbox = QCheckBox()
         self.work_dir_input = QLineEdit()
         self.work_dir_input.setPlaceholderText("/path/to/working/dir")
         self.cpuset_input = QLineEdit()
@@ -49,6 +50,7 @@ class ProcessDialog(QDialog):
         self.form_layout.addRow("Host:", self.host_input)
         self.form_layout.addRow("Auto Restart:", self.auto_restart_checkbox)
         self.form_layout.addRow("Realtime:", self.realtime_checkbox)
+        self.form_layout.addRow("Isolated:", self.isolated_checkbox)
         self.form_layout.addRow("Working Dir:", self.work_dir_input)
         self.form_layout.addRow("CPU Set:", self.cpuset_input)
         self.form_layout.addRow("CPU Limit:", self.cpu_limit_input)
@@ -80,6 +82,7 @@ class ProcessDialog(QDialog):
             bool(getattr(self.proc, "auto_restart", False))
         )
         self.realtime_checkbox.setChecked(bool(getattr(self.proc, "realtime", False)))
+        self.isolated_checkbox.setChecked(bool(getattr(self.proc, "isolated", False)))
         self.work_dir_input.setText(getattr(self.proc, "work_dir", "") or "")
         self.cpuset_input.setText(getattr(self.proc, "cpuset", "") or "")
         cpu_limit = getattr(self.proc, "cpu_limit", 0.0) or 0.0
@@ -94,6 +97,7 @@ class ProcessDialog(QDialog):
         host = self.host_input.text().strip()
         auto_restart = self.auto_restart_checkbox.isChecked()
         realtime = self.realtime_checkbox.isChecked()
+        isolated = self.isolated_checkbox.isChecked()
         work_dir = self.work_dir_input.text().strip()
         cpuset = self.cpuset_input.text().strip()
         try:
@@ -124,6 +128,7 @@ class ProcessDialog(QDialog):
                 name, proc_command, group, host, auto_restart, realtime,
                 work_dir=work_dir, cpuset=cpuset,
                 cpu_limit=cpu_limit, mem_limit=mem_limit,
+                isolated=isolated,
             )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save process: {e}")

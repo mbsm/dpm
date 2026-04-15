@@ -177,6 +177,7 @@ def cmd_create(supervisor, args) -> int:
         name, args.cmd, args.group, host, args.auto_restart, args.realtime,
         work_dir=args.work_dir, cpuset=args.cpuset,
         cpu_limit=args.cpu_limit, mem_limit=args.mem_limit,
+        isolated=args.isolated,
     )
 
     if wait_for_telemetry(supervisor):
@@ -364,6 +365,7 @@ def cmd_move(supervisor, args) -> int:
     group = getattr(src_proc, "group", "")
     auto_restart = bool(getattr(src_proc, "auto_restart", False))
     realtime = bool(getattr(src_proc, "realtime", False))
+    isolated = bool(getattr(src_proc, "isolated", False))
     was_running = getattr(src_proc, "state", "") == "R"
 
     label = f"{src_name}@{src_host} -> {dst_name}@{dst_host}"
@@ -378,7 +380,8 @@ def cmd_move(supervisor, args) -> int:
 
     # Step 2: Create on destination
     print(f"Creating {dst_name}@{dst_host}...")
-    supervisor.create_proc(dst_name, exec_command, group, dst_host, auto_restart, realtime)
+    supervisor.create_proc(dst_name, exec_command, group, dst_host, auto_restart, realtime,
+                           isolated=isolated)
     wait_for_state(supervisor, dst_name, dst_host, target="T", timeout=5.0)
 
     # Verify it appeared

@@ -250,6 +250,14 @@ class Supervisor:
             state = self._proc_output_states.get(proc_name)
             return state.last_msg if state else None
 
+    def clear_proc_output(self, proc_name: str) -> None:
+        """Thread-safe: flush the output buffer for *proc_name*."""
+        with self._outputs_lock:
+            state = self._proc_output_states.get(proc_name)
+            if state is not None:
+                state.buf = ""
+                state.gen += 1
+
     # Keep snapshot property if other GUI parts use it, but prefer get_proc_output_delta()
     @property
     def proc_output_buffers(self) -> Dict[str, str]:
@@ -281,6 +289,7 @@ class Supervisor:
         exec_command: str = "",
         auto_restart: bool = False,
         realtime: bool = False,
+        isolated: bool = False,
         work_dir: str = "",
         cpuset: str = "",
         cpu_limit: float = 0.0,
@@ -294,6 +303,7 @@ class Supervisor:
         msg.exec_command = exec_command
         msg.auto_restart = bool(auto_restart)
         msg.realtime = bool(realtime)
+        msg.isolated = bool(isolated)
         msg.work_dir = work_dir
         msg.cpuset = cpuset
         msg.cpu_limit = float(cpu_limit)
@@ -312,11 +322,12 @@ class Supervisor:
         cpuset: str = "",
         cpu_limit: float = 0.0,
         mem_limit: int = 0,
+        isolated: bool = False,
     ) -> None:
         self._send_command("create_process", name=cmd_name, hostname=host, group=group,
                            exec_command=proc_cmd, auto_restart=auto_restart, realtime=realtime,
-                           work_dir=work_dir, cpuset=cpuset, cpu_limit=cpu_limit,
-                           mem_limit=mem_limit)
+                           isolated=isolated, work_dir=work_dir, cpuset=cpuset,
+                           cpu_limit=cpu_limit, mem_limit=mem_limit)
 
     def start_proc(self, cmd_name: str, host: str) -> None:
         self._send_command("start_process", name=cmd_name, hostname=host)

@@ -51,7 +51,7 @@ def _validate_spec(spec: Dict[str, Any]) -> None:
         val = spec.get(field, "")
         if not isinstance(val, str):
             raise ValueError(f"spec field '{field}' must be a string, got {val!r}")
-    for field in ("auto_restart", "realtime"):
+    for field in ("auto_restart", "realtime", "isolated"):
         val = spec.get(field, False)
         if not isinstance(val, bool):
             raise ValueError(f"spec field '{field}' must be a boolean, got {val!r}")
@@ -90,6 +90,7 @@ def load_and_create(
             group = spec.get("group", "")
             auto_restart = bool(spec.get("auto_restart", False))
             realtime = bool(spec.get("realtime", False))
+            isolated = bool(spec.get("isolated", False))
 
             supervisor.create_proc(
                 name, exec_command, group, host, auto_restart, realtime,
@@ -97,6 +98,7 @@ def load_and_create(
                 cpuset=str(spec.get("cpuset", "")),
                 cpu_limit=float(spec.get("cpu_limit", 0.0)),
                 mem_limit=int(spec.get("mem_limit", 0)),
+                isolated=isolated,
             )
             created.append(f"{name}@{host}")
         except Exception as e:
@@ -127,6 +129,7 @@ def save_all_process_specs(
         group = getattr(p, "group", "") or ""
         auto_restart = bool(getattr(p, "auto_restart", False))
         realtime = bool(getattr(p, "realtime", False))
+        isolated = bool(getattr(p, "isolated", False))
 
         if not (name and host and exec_command):
             skipped += 1
@@ -140,6 +143,7 @@ def save_all_process_specs(
                 "group": group,
                 "auto_restart": auto_restart,
                 "realtime": realtime,
+                "isolated": isolated,
                 "work_dir": getattr(p, "work_dir", "") or "",
                 "cpuset": getattr(p, "cpuset", "") or "",
                 "cpu_limit": float(getattr(p, "cpu_limit", 0.0) or 0.0),
