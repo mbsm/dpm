@@ -181,6 +181,9 @@ class Agent:
         )
 
         self.hostname = socket.gethostname()
+        self._cached_ip = get_ip()
+        self._ip_refresh_time = time.monotonic()
+        self._cpu_count = psutil.cpu_count()
         _net = psutil.net_io_counters()
         self.last_publish_time = time.time()
         self.last_net_tx = _net.bytes_sent
@@ -1003,9 +1006,15 @@ class Agent:
 
         msg = host_info_t()
         msg.timestamp = int(time.time() * 1e6)
+        # Refresh cached IP every 60 seconds
+        now_mono = time.monotonic()
+        if now_mono - self._ip_refresh_time > 60:
+            self._cached_ip = get_ip()
+            self._ip_refresh_time = now_mono
+
         msg.hostname = self.hostname
-        msg.ip = get_ip()
-        msg.cpus = psutil.cpu_count()
+        msg.ip = self._cached_ip
+        msg.cpus = self._cpu_count
         msg.cpu_usage = cpu_usage
         msg.mem_total = mem.total
         msg.mem_free = mem.free

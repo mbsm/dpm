@@ -457,6 +457,7 @@ def cmd_logs(supervisor, args) -> int:
 
     last_gen = 0
     last_len = 0
+    idle_count = 0
     try:
         while True:
             gen, text, reset, cur_len = supervisor.get_proc_output_delta(
@@ -465,9 +466,13 @@ def cmd_logs(supervisor, args) -> int:
             if text:
                 sys.stdout.write(text)
                 sys.stdout.flush()
+                idle_count = 0
+            else:
+                idle_count += 1
             last_gen = gen
             last_len = cur_len
-            time.sleep(0.2)
+            # Adaptive: 50ms when active, ramp up to 500ms when idle
+            time.sleep(min(0.05 * (idle_count + 1), 0.5))
     except KeyboardInterrupt:
         print()  # clean newline after ^C
     return 0

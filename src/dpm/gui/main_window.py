@@ -439,6 +439,7 @@ class MainWindow(QMainWindow):
         # Update or create cards without clearing to avoid flicker
         now = time.time()
         seen_hosts = set()
+        all_procs = self.supervisor.procs  # single snapshot for the whole loop
         for host, info in self.supervisor.hosts.items():
             ts_us = getattr(info, "timestamp", 0) or 0
             try:
@@ -480,13 +481,12 @@ class MainWindow(QMainWindow):
             persist = bool(getattr(info, "persist", False))
             interval = float(getattr(info, "report_interval", 1.0) or 1.0)
 
-            # Count processes on this host
-            procs = self.supervisor.procs
-            host_procs = [(h, n) for (h, n), p in procs.items() if h == host]
+            # Count processes on this host (using cached snapshot)
+            host_procs = [(h, n) for (h, n), p in all_procs.items() if h == host]
             total = len(host_procs)
             running = sum(
                 1 for h, n in host_procs
-                if getattr(procs.get((h, n)), "state", "") == "R"
+                if getattr(all_procs.get((h, n)), "state", "") == "R"
             )
 
             # Update content only

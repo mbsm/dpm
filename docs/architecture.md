@@ -56,12 +56,13 @@ The `state` field is the single source of truth for process lifecycle. The redun
 
 ### 4.1 States
 
-| Code | Name    | Meaning |
-|------|---------|---------|
-| `T`  | Ready   | Created but not started, or cleanly stopped (exit 0 / graceful SIGTERM) |
-| `R`  | Running | Process is alive |
-| `F`  | Failed  | Non-zero exit, or failed to start |
-| `K`  | Killed  | Force-killed (SIGKILL after stop timeout) |
+| Code | Name      | Meaning |
+|------|-----------|---------|
+| `T`  | Ready     | Created but not started, or cleanly stopped (exit 0 / graceful SIGTERM) |
+| `R`  | Running   | Process is alive |
+| `F`  | Failed    | Non-zero exit, or failed to start |
+| `K`  | Killed    | Force-killed (SIGKILL after stop timeout) |
+| `S`  | Suspended | Auto-restart attempts exhausted (circuit breaker tripped) |
 
 ### 4.2 Transitions
 
@@ -75,33 +76,38 @@ monitor: exit≠0 → FAILED → auto_restart (with backoff) → RUNNING
 
 ### 4.3 Auto-restart with backoff
 
-Processes with `auto_restart=True` are restarted only on FAILED state (non-zero exit). Exponential backoff prevents tight restart loops: 1s, 2s, 4s, 8s, ... capped at 60s. The counter resets on successful start.
+Processes with `auto_restart=True` are restarted only on FAILED state (non-zero exit). Exponential backoff prevents tight restart loops: 1s, 2s, 4s, 8s, ... capped at 60s. The counter resets on clean exit (code 0). When `max_restarts` is configured and exceeded, the process enters SUSPENDED. A manual `dpm start` clears the counter and resumes normal operation.
 
 ### 4.4 Realtime priority
 
 Per-process `realtime` flag uses `SCHED_FIFO` with configurable priority via `rt_priority` in `dpm.yaml` (default: 40). Requires `CAP_SYS_NICE`.
 
-## 5. Node feature roadmap (non-protocol)
+## 5. Resource Isolation and Process Controls
 
-### 5.1 Realtime / performance controls (future)
-Potential per-process spec fields:
-- `cpu_affinity`: list of cores (pin process)
-- `rt_policy`: FIFO/RR (currently hard-coded to FIFO)
-- `nice`: -20..19
+### 5.1 Cgroups v2
+
+Processes can be assigned CPU affinity, CPU bandwidth limits, memory limits, and exclusive core reservation via cgroups v2. The agent creates per-process cgroup directories under `/sys/fs/cgroup/<agent-cgroup>/<process_name>/` and cleans them up on stop/delete.
+
+Per-process fields: `cpuset`, `cpu_limit`, `mem_limit`, `isolated`.
+
+Requires: cgroups v2 unified hierarchy and `Delegate=yes` in the systemd service unit. Graceful degradation when cgroups are unavailable.
+
+### 5.2 Realtime priority
+
+Per-process `realtime` flag uses `SCHED_FIFO` with configurable priority via `rt_priority` in `dpm.yaml`. Combine with `--cpuset --isolated` for low-preemption execution.
+
+### 5.3 Declarative launch system
+
+YAML-based dependency graph for multi-host startup/shutdown. Groups start in parallel waves resolved by topological sort. Supports hard dependencies (`requires`) and soft ordering (`after`).
+
+### 5.4 Stale host eviction
+
+The supervisor automatically removes hosts that stop reporting telemetry (3x their `report_interval`), keeping the UI and CLI clean.
+
+### 5.5 Future enhancements
+- Health checks (readiness probes, port checks)
 - Per-process `rt_priority` override (currently global config)
-
-Implementation options:
-- `os.sched_setaffinity(pid, ...)`
-- cgroups (`cpuset`, `cpu`) for stronger containment
-
-### 5.2 Resource limits
-- memory limit, cpu quota (cgroups)
-- file descriptor limits
-- environment variable allowlist
-
-### 5.3 Health checks
-- readiness checks (port open / command exit / custom probe)
-- dependency ordering by group
+- File descriptor limits, environment variable allowlist
 
 ## 6. Packaging
 

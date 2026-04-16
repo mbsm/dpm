@@ -74,6 +74,8 @@ class Supervisor:
 
         # data ((hostname, proc_name) -> proc_info_t)
         self._procs: Dict[Tuple[str, str], proc_info_t] = {}
+        # secondary index: hostname -> set of proc names (avoids linear scan)
+        self._procs_by_host: Dict[str, set] = {}
 
         # Per-process output state (proc_name -> _ProcOutputState)
         self._proc_output_states: Dict[str, _ProcOutputState] = {}
@@ -170,19 +172,15 @@ class Supervisor:
         # Update atomically under lock (avoid GUI races)
         with self._procs_lock:
             # remove old procs for this host that are not in the new set
-            existing_keys = [
-                k
-                for k in self._procs
-                if k[0] == hostname
-            ]
+            existing_names = self._procs_by_host.get(hostname, set())
             new_names = {p.name for p in msg.procs}
-            for k in existing_keys:
-                if k[1] not in new_names:
-                    del self._procs[k]
+            for name in existing_names - new_names:
+                del self._procs[(hostname, name)]
 
             # upsert
             for p in msg.procs:
                 self._procs[(hostname, p.name)] = p
+            self._procs_by_host[hostname] = new_names
 
     def proc_outputs_handler(self, _channel, data) -> None:
         try:
@@ -435,10 +433,11 @@ class Supervisor:
                 logging.info("Supervisor: evicted stale host %s", hostname)
 
         if stale:
+            stale_set = set(stale)
             with self._procs_lock:
-                keys_to_remove = [k for k in self._procs if k[0] in stale]
-                for k in keys_to_remove:
-                    del self._procs[k]
+                for hostname in stale:
+                    for name in self._procs_by_host.pop(hostname, set()):
+                        self._procs.pop((hostname, name), None)
 
     def _thread_func(self) -> None:
         evict_counter = 0

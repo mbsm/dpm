@@ -149,7 +149,7 @@ States:
 - **SUSPENDED** (`S`): auto-restart attempts exhausted (circuit breaker tripped)
 
 Auto-restart triggers only on FAILED state with exponential backoff (1s, 2s, 4s, ... capped at 60s).
-When `max_restarts` is configured and exceeded, the process enters SUSPENDED instead of restarting.
+The backoff counter resets on clean exit (code 0). When `max_restarts` is configured and exceeded, the process enters SUSPENDED instead of restarting.
 A manual `dpm start` clears the counter and resumes normal operation.
 
 ## Command Actions
