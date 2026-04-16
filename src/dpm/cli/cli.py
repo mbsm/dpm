@@ -196,9 +196,7 @@ def _resolve_args(args):
             args.host = parse_at_host(args.target)
         else:
             args.host = None
-    elif cmd in ("start", "stop", "restart", "delete"):
-        args.name, args.host = parse_name_at_host(args.target)
-    elif cmd == "create":
+    elif cmd in ("start", "stop", "restart", "delete", "create"):
         args.name, args.host = parse_name_at_host(args.target)
     elif cmd in ("start-group", "stop-group"):
         args.group, args.host = parse_name_at_host(args.target)

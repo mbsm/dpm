@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """DPM agent — runs on each host to manage and monitor local processes."""
 
-import fcntl
 import logging
 import logging.handlers
 import os
@@ -14,6 +13,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from subprocess import PIPE
+from typing import Any
 
 import psutil
 import yaml
@@ -86,11 +86,6 @@ class Timer:
         return False
 
 
-def set_nonblocking(fd: int) -> None:
-    fl = fcntl.fcntl(fd, fcntl.F_GETFL)
-    fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
-
-
 def is_running(proc: psutil.Popen | None) -> bool:
     if proc is None:
         return False
@@ -114,6 +109,34 @@ def stream_reader(stream, output_list, lock: threading.Lock) -> None:
                     logging.debug("Stream Reader: Captured line: %r", line)
     except (OSError, ValueError) as e:
         logging.error("Stream Reader: Error reading stream: %s", e)
+
+
+@dataclass
+class ProcessEntry:
+    """All state for a single managed process."""
+    exec_command: str = ""
+    auto_restart: bool = False
+    realtime: bool = False
+    isolated: bool = False
+    group: str = ""
+    work_dir: str = ""
+    cpuset: str = ""
+    cpu_limit: float = 0.0
+    mem_limit: int = 0
+    state: str = "T"  # STATE_READY
+    errors: str = ""
+    exit_code: int = -1
+    stdout: str = ""
+    stderr: str = ""
+    restart_count: int = 0
+    last_restart_time: float = 0.0
+    proc: Any = None       # psutil.Popen | None
+    ps_proc: Any = None    # psutil.Process | None
+    output_lock: Any = None  # threading.Lock | None
+    stdout_lines: list = field(default_factory=list)
+    stderr_lines: list = field(default_factory=list)
+    stdout_thread: Any = None  # threading.Thread | None
+    stderr_thread: Any = None  # threading.Thread | None
 
 
 class Agent:
@@ -337,15 +360,15 @@ class Agent:
         for name, info in self.processes.items():
             specs.append({
                 "name": name,
-                "exec_command": info["exec_command"],
-                "group": info.get("group", ""),
-                "auto_restart": info["auto_restart"],
-                "realtime": info["realtime"],
-                "isolated": info.get("isolated", False),
-                "work_dir": info.get("work_dir", ""),
-                "cpuset": info.get("cpuset", ""),
-                "cpu_limit": info.get("cpu_limit", 0.0),
-                "mem_limit": info.get("mem_limit", 0),
+                "exec_command": info.exec_command,
+                "group": info.group,
+                "auto_restart": info.auto_restart,
+                "realtime": info.realtime,
+                "isolated": info.isolated,
+                "work_dir": info.work_dir,
+                "cpuset": info.cpuset,
+                "cpu_limit": info.cpu_limit,
+                "mem_limit": info.mem_limit,
             })
         try:
             self._atomic_yaml_write(self._persist_path, specs)
@@ -479,37 +502,26 @@ class Agent:
 
         action = msg.action
 
+        # Dispatch table for simple name/group/exec_command actions
+        _dispatch = {
+            "start_process": lambda: self.start_process(msg.name),
+            "stop_process": lambda: self.stop_process(msg.name),
+            "delete_process": lambda: self.delete_process(msg.name),
+            "start_group": lambda: self.start_group(msg.group),
+            "stop_group": lambda: self.stop_group(msg.group),
+            "set_interval": lambda: self.set_interval(msg.exec_command),
+            "set_persistence": lambda: self.set_persistence(msg.exec_command),
+        }
+
         if action == "create_process":
-            # Call positionally to match Agent.create_process signature
-            # Expected order (based on current codebase usage): (name, exec_command, auto_restart, realtime, group)
             self.create_process(
                 msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group,
                 work_dir=msg.work_dir, cpuset=msg.cpuset,
                 cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
                 isolated=msg.isolated,
             )
-
-        elif action == "start_process":
-            self.start_process(msg.name)
-
-        elif action == "stop_process":
-            self.stop_process(msg.name)
-
-        elif action == "delete_process":
-            self.delete_process(msg.name)
-
-        elif action == "start_group":
-            self.start_group(msg.group)
-
-        elif action == "stop_group":
-            self.stop_group(msg.group)
-
-        elif action == "set_interval":
-            self.set_interval(msg.exec_command)
-
-        elif action == "set_persistence":
-            self.set_persistence(msg.exec_command)
-
+        elif action in _dispatch:
+            _dispatch[action]()
         else:
             logging.warning("Unknown action: %s", action)
 
@@ -519,33 +531,24 @@ class Agent:
     ) -> None:
         """Register a process definition without starting it."""
         existing = self.processes.get(process_name)
-        if existing is not None and is_running(existing.get("proc")):
+        if existing is not None and is_running(existing.proc):
             logging.warning(
                 "Create Process: Process %s is running (PID %s); stopping before re-create.",
-                process_name, existing["proc"].pid,
+                process_name, existing.proc.pid,
             )
             self.stop_process(process_name)
 
-        self.processes[process_name] = {
-            "proc": None,
-            "ps_proc": None,
-            "exec_command": exec_command,
-            "auto_restart": bool(auto_restart),
-            "realtime": bool(realtime),
-            "isolated": bool(isolated),
-            "group": group,
-            "work_dir": work_dir,
-            "cpuset": cpuset,
-            "cpu_limit": float(cpu_limit),
-            "mem_limit": int(mem_limit),
-            "state": STATE_READY,
-            "errors": "",
-            "exit_code": -1,
-            "stdout": "",
-            "stderr": "",
-            "restart_count": 0,
-            "last_restart_time": 0.0,
-        }
+        self.processes[process_name] = ProcessEntry(
+            exec_command=exec_command,
+            auto_restart=bool(auto_restart),
+            realtime=bool(realtime),
+            isolated=bool(isolated),
+            group=group,
+            work_dir=work_dir,
+            cpuset=cpuset,
+            cpu_limit=float(cpu_limit),
+            mem_limit=int(mem_limit),
+        )
         logging.info(
             "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
             process_name,
@@ -558,10 +561,10 @@ class Agent:
     def delete_process(self, process_name) -> None:
         """Delete a process definition, stopping it first if needed."""
         if process_name in self.processes:
-            if self.processes[process_name]["proc"] is not None:
+            if self.processes[process_name].proc is not None:
                 self.stop_process(process_name)
             # ensure no stale psutil handle
-            self.processes[process_name]["ps_proc"] = None
+            self.processes[process_name].ps_proc = None
             cleanup_cgroup(process_name)
             del self.processes[process_name]
             logging.info("Delete Process: Deleted process: %s", process_name)
@@ -581,9 +584,9 @@ class Agent:
             return
 
         proc_info = self.processes[process_name]
-        proc = proc_info["proc"]
-        exec_command = proc_info["exec_command"]
-        realtime = proc_info["realtime"]
+        proc = proc_info.proc
+        exec_command = proc_info.exec_command
+        realtime = proc_info.realtime
 
         if is_running(proc):
             logging.info(
@@ -594,17 +597,17 @@ class Agent:
             return
 
         # Clear suspended state on manual start
-        if proc_info["state"] == STATE_SUSPENDED:
-            proc_info["restart_count"] = 0
-            proc_info["last_restart_time"] = 0.0
+        if proc_info.state == STATE_SUSPENDED:
+            proc_info.restart_count = 0
+            proc_info.last_restart_time = 0.0
             logging.info(
                 "Start Process: Clearing SUSPENDED state for %s.", process_name
             )
 
         # Clear any stale buffered output from a previous run so it isn't
         # re-published after restart and mixed with the new process's output.
-        proc_info["stdout"] = ""
-        proc_info["stderr"] = ""
+        proc_info.stdout = ""
+        proc_info.stderr = ""
 
         logging.info(
             "Start Process: Starting process: %s with command: %s",
@@ -616,16 +619,16 @@ class Agent:
         output_lock = threading.Lock()
         stdout_lines = []
         stderr_lines = []
-        proc_info["output_lock"] = output_lock
-        proc_info["stdout_lines"] = stdout_lines
-        proc_info["stderr_lines"] = stderr_lines
+        proc_info.output_lock = output_lock
+        proc_info.stdout_lines = stdout_lines
+        proc_info.stderr_lines = stderr_lines
 
-        work_dir = proc_info.get("work_dir", "")
+        work_dir = proc_info.work_dir
         if work_dir and not os.path.isdir(work_dir):
             error_msg = f"Working directory does not exist: {work_dir}"
             logging.error("Start Process: %s", error_msg)
-            proc_info["state"] = STATE_FAILED
-            proc_info["errors"] = error_msg
+            proc_info.state = STATE_FAILED
+            proc_info.errors = error_msg
             return
 
         try:
@@ -643,9 +646,9 @@ class Agent:
                 popen_kwargs["cwd"] = work_dir
 
             proc = psutil.Popen(argv, **popen_kwargs)
-            proc_info["proc"] = proc
-            proc_info["state"] = STATE_RUNNING
-            proc_info["errors"] = ""
+            proc_info.proc = proc
+            proc_info.state = STATE_RUNNING
+            proc_info.errors = ""
 
             # Start threads to read stdout and stderr.
             # A single lock guards both lists so the drain in monitor_process
@@ -658,8 +661,8 @@ class Agent:
             )
             stdout_thread.start()
             stderr_thread.start()
-            proc_info["stdout_thread"] = stdout_thread
-            proc_info["stderr_thread"] = stderr_thread
+            proc_info.stdout_thread = stdout_thread
+            proc_info.stderr_thread = stderr_thread
 
             logging.info(
                 "Start Process: Started process: %s with PID %s", process_name, proc.pid
@@ -667,10 +670,10 @@ class Agent:
 
             # Prime CPU sampling via the persistent psutil.Process used in publish_host_procs()
             try:
-                proc_info["ps_proc"] = psutil.Process(proc.pid)
-                proc_info["ps_proc"].cpu_percent(interval=None)
+                proc_info.ps_proc = psutil.Process(proc.pid)
+                proc_info.ps_proc.cpu_percent(interval=None)
             except (psutil.Error, OSError, ValueError):
-                proc_info["ps_proc"] = None
+                proc_info.ps_proc = None
 
             if realtime:
                 try:
@@ -686,22 +689,20 @@ class Agent:
                         "Start Process: Failed to set real-time priority for process %s: Permission denied.",
                         process_name,
                     )
-                    self.processes[process_name][
-                        "errors"
-                    ] = "Permission denied setting real-time priority."
+                    self.processes[process_name].errors = "Permission denied setting real-time priority."
                 except (OSError, ValueError) as e:
                     logging.error(
                         "Start Process: Failed to set real-time priority for process %s: %s",
                         process_name,
                         e,
                     )
-                    self.processes[process_name]["errors"] = str(e)
+                    self.processes[process_name].errors = str(e)
 
             # Apply cgroup resource limits (cpuset, CPU, memory, isolation)
-            _cpuset = proc_info.get("cpuset", "")
-            _cpu_limit = proc_info.get("cpu_limit", 0.0)
-            _mem_limit = proc_info.get("mem_limit", 0)
-            _isolated = proc_info.get("isolated", False)
+            _cpuset = proc_info.cpuset
+            _cpu_limit = proc_info.cpu_limit
+            _mem_limit = proc_info.mem_limit
+            _isolated = proc_info.isolated
             if (_cpuset or _cpu_limit > 0 or _mem_limit > 0) and cgroups_available():
                 try:
                     setup_cgroup(process_name, proc.pid,
@@ -717,9 +718,9 @@ class Agent:
             # Mark process as failed and store error
             error_msg = f"Failed to start process {process_name}: {e}"
             logging.error("Start Process: %s", error_msg)
-            proc_info["state"] = STATE_FAILED
-            proc_info["errors"] = str(e)
-            proc_info["proc"] = None
+            proc_info.state = STATE_FAILED
+            proc_info.errors = str(e)
+            proc_info.proc = None
 
             # Publish startup error to proc_outputs so GUI can show it
             try:
@@ -727,7 +728,7 @@ class Agent:
                 msg.timestamp = int(time.time() * 1e6)
                 msg.name = process_name
                 msg.hostname = self.hostname
-                msg.group = proc_info.get("group", "")
+                msg.group = proc_info.group
                 msg.stdout = ""
                 msg.stderr = error_msg
                 self.lc.publish(self.proc_outputs_channel, msg.encode())
@@ -750,7 +751,7 @@ class Agent:
             return
 
         proc_info = self.processes[process_name]
-        proc = proc_info["proc"]
+        proc = proc_info.proc
 
         if proc is None:
             logging.info(
@@ -758,7 +759,7 @@ class Agent:
             )
             return
 
-        if proc_info["state"] == STATE_READY:
+        if proc_info.state == STATE_READY:
             logging.info("Stop Process: Process %s is already stopped.", process_name)
             return
 
@@ -767,10 +768,10 @@ class Agent:
                 "Stop Process: Process %s (PID %s) already exited, updating state.",
                 process_name, proc.pid,
             )
-            proc_info["proc"] = None
-            proc_info["ps_proc"] = None
-            proc_info["state"] = STATE_READY
-            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else -1
+            proc_info.proc = None
+            proc_info.ps_proc = None
+            proc_info.state = STATE_READY
+            proc_info.exit_code = proc.returncode if proc.returncode is not None else -1
             cleanup_cgroup(process_name)
             return
 
@@ -786,8 +787,8 @@ class Agent:
                 process_name,
                 proc.pid,
             )
-            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else 0
-            proc_info["state"] = STATE_READY
+            proc_info.exit_code = proc.returncode if proc.returncode is not None else 0
+            proc_info.state = STATE_READY
 
         except psutil.TimeoutExpired:
             # Escalate to SIGKILL for the group
@@ -806,12 +807,12 @@ class Agent:
                 process_name,
                 proc.pid,
             )
-            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else -9
-            proc_info["state"] = STATE_KILLED
+            proc_info.exit_code = proc.returncode if proc.returncode is not None else -9
+            proc_info.state = STATE_KILLED
 
         finally:
-            proc_info["proc"] = None
-            proc_info["ps_proc"] = None
+            proc_info.proc = None
+            proc_info.ps_proc = None
             cleanup_cgroup(process_name)
 
     def _handle_signal(self, signum, frame) -> None:
@@ -842,30 +843,44 @@ class Agent:
             )
             return False
 
-    def _check_auto_restart(self, process_name: str, proc_info: dict) -> None:
+    @staticmethod
+    def _drain_output(proc_info: "ProcessEntry") -> tuple[str, str]:
+        """Drain buffered stdout/stderr lines under the output lock.
+
+        Returns (stdout_content, stderr_content) and clears the line buffers.
+        """
+        output_lock = proc_info.output_lock
+        with output_lock:
+            stdout_content = "".join(proc_info.stdout_lines)
+            stderr_content = "".join(proc_info.stderr_lines)
+            proc_info.stdout_lines.clear()
+            proc_info.stderr_lines.clear()
+        return stdout_content, stderr_content
+
+    def _check_auto_restart(self, process_name: str, proc_info: "ProcessEntry") -> None:
         """Check backoff timer and restart a failed process if ready.
 
         Called both when a process first fails and on subsequent monitor
         cycles while waiting for the backoff period to elapse.
         """
-        restart_count = proc_info.get("restart_count", 0)
+        restart_count = proc_info.restart_count
 
         # Circuit breaker: suspend if max restarts exceeded
         if self.max_restarts >= 0 and restart_count >= self.max_restarts:
-            proc_info["state"] = STATE_SUSPENDED
+            proc_info.state = STATE_SUSPENDED
             logging.warning(
                 "Monitor Process: Process %s suspended after %d restart attempts.",
                 process_name, restart_count,
             )
             return
 
-        elapsed = time.monotonic() - proc_info.get("last_restart_time", 0.0)
+        elapsed = time.monotonic() - proc_info.last_restart_time
         backoff = min(2 ** restart_count, 60)
         if elapsed < backoff:
             return  # wait for backoff period — will re-enter on next monitor cycle
 
-        proc_info["restart_count"] = restart_count + 1
-        proc_info["last_restart_time"] = time.monotonic()
+        proc_info.restart_count = restart_count + 1
+        proc_info.last_restart_time = time.monotonic()
         logging.info(
             "Monitor Process: Restarting process %s (attempt %d, backoff %.0fs).",
             process_name, restart_count + 1, backoff,
@@ -882,55 +897,50 @@ class Agent:
             return
 
         proc_info = self.processes[process_name]
-        proc = proc_info["proc"]
+        proc = proc_info.proc
 
         # Re-entry for backoff: process already failed, waiting to restart
-        if proc is None and proc_info["state"] == STATE_FAILED and proc_info["auto_restart"]:
+        if proc is None and proc_info.state == STATE_FAILED and proc_info.auto_restart:
             self._check_auto_restart(process_name, proc_info)
             return
 
         # Nothing to monitor if not running
-        if proc is None or proc_info["state"] != STATE_RUNNING:
+        if proc is None or proc_info.state != STATE_RUNNING:
             return
 
         if not is_running(proc):
             exit_code = proc.poll()
             exit_code = exit_code if exit_code is not None else -1
-            proc_info["exit_code"] = exit_code
-            proc_info["proc"] = None
+            proc_info.exit_code = exit_code
+            proc_info.proc = None
 
             if exit_code == 0:
                 logging.info(
                     "Monitor Process: Process %s exited cleanly (code 0).",
                     process_name,
                 )
-                proc_info["state"] = STATE_READY
-                proc_info["restart_count"] = 0
+                proc_info.state = STATE_READY
+                proc_info.restart_count = 0
             else:
                 logging.warning(
                     "Monitor Process: Process %s failed with exit code: %s",
                     process_name,
                     exit_code,
                 )
-                proc_info["state"] = STATE_FAILED
+                proc_info.state = STATE_FAILED
 
             # Wait for reader threads to finish so all pipe data is captured
-            for tkey in ("stdout_thread", "stderr_thread"):
-                t = proc_info.get(tkey)
+            for tattr in ("stdout_thread", "stderr_thread"):
+                t = getattr(proc_info, tattr, None)
                 if t is not None:
                     t.join(timeout=2.0)
-                    proc_info[tkey] = None
+                    setattr(proc_info, tattr, None)
 
             # Capture any remaining output
-            output_lock = proc_info["output_lock"]
-            with output_lock:
-                stdout_content = "".join(proc_info["stdout_lines"])
-                stderr_content = "".join(proc_info["stderr_lines"])
-                proc_info["stdout_lines"].clear()
-                proc_info["stderr_lines"].clear()
+            stdout_content, stderr_content = self._drain_output(proc_info)
 
             if stdout_content or stderr_content:
-                proc_info["errors"] = stdout_content + stderr_content
+                proc_info.errors = stdout_content + stderr_content
 
                 # Publish the captured output to LCM immediately
                 try:
@@ -938,7 +948,7 @@ class Agent:
                     msg.timestamp = int(time.time() * 1e6)
                     msg.name = process_name
                     msg.hostname = self.hostname
-                    msg.group = proc_info["group"]
+                    msg.group = proc_info.group
                     msg.stdout = stdout_content
                     msg.stderr = stderr_content
                     self.lc.publish(self.proc_outputs_channel, msg.encode())
@@ -949,30 +959,25 @@ class Agent:
                         pub_e,
                     )
             elif exit_code != 0:
-                proc_info["errors"] = f"Process exited with code {exit_code}."
+                proc_info.errors = f"Process exited with code {exit_code}."
 
             # Auto-restart only on failure (non-zero exit), with exponential backoff
-            if proc_info["auto_restart"] and exit_code != 0:
+            if proc_info.auto_restart and exit_code != 0:
                 self._check_auto_restart(process_name, proc_info)
             return
 
         # Still running: pull any accumulated stream output into stdout/stderr buffers
-        output_lock = proc_info["output_lock"]
-        with output_lock:
-            stdout_content = "".join(proc_info["stdout_lines"])
-            stderr_content = "".join(proc_info["stderr_lines"])
-            if stdout_content:
-                proc_info["stdout"] += stdout_content
-            if stderr_content:
-                proc_info["stderr"] += stderr_content
-            proc_info["stdout_lines"].clear()
-            proc_info["stderr_lines"].clear()
+        stdout_content, stderr_content = self._drain_output(proc_info)
+        if stdout_content:
+            proc_info.stdout += stdout_content
+        if stderr_content:
+            proc_info.stderr += stderr_content
 
         # Cap buffers to prevent unbounded memory growth
-        if len(proc_info["stdout"]) > MAX_OUTPUT_BUFFER:
-            proc_info["stdout"] = proc_info["stdout"][-MAX_OUTPUT_BUFFER:]
-        if len(proc_info["stderr"]) > MAX_OUTPUT_BUFFER:
-            proc_info["stderr"] = proc_info["stderr"][-MAX_OUTPUT_BUFFER:]
+        if len(proc_info.stdout) > MAX_OUTPUT_BUFFER:
+            proc_info.stdout = proc_info.stdout[-MAX_OUTPUT_BUFFER:]
+        if len(proc_info.stderr) > MAX_OUTPUT_BUFFER:
+            proc_info.stderr = proc_info.stderr[-MAX_OUTPUT_BUFFER:]
 
     def publish_host_info(self) -> None:
         """Publish host-wide telemetry (CPU, memory, network)."""
@@ -1032,15 +1037,15 @@ class Agent:
         nice = int(psutil.Process(pid).nice())
         return 20 + nice
 
-    def _ensure_psutil_proc(self, proc_info: dict, pid: int) -> psutil.Process | None:
-        p = proc_info.get("ps_proc")
+    def _ensure_psutil_proc(self, proc_info: "ProcessEntry", pid: int) -> psutil.Process | None:
+        p = proc_info.ps_proc
         if p is not None:
             return p
 
         try:
             p = psutil.Process(pid)
             p.cpu_percent(interval=None)
-            proc_info["ps_proc"] = p
+            proc_info.ps_proc = p
             return p
         except (psutil.Error, OSError, ValueError):
             return None
@@ -1056,40 +1061,28 @@ class Agent:
         msg_proc.runtime = 0
 
     def _fill_proc_metrics(
-        self, msg_proc: proc_info_t, proc_info: dict, pid: int
+        self, msg_proc: proc_info_t, proc_info: "ProcessEntry", pid: int
     ) -> None:
         p = self._ensure_psutil_proc(proc_info, pid)
         if p is None:
             self._zero_proc_metrics(msg_proc)
             return
 
+        # All metric reads can fail if the process exits mid-collection.
+        # Collect what we can and zero the rest.
         try:
             msg_proc.cpu = float(p.cpu_percent(interval=None)) / 100.0
-        except (psutil.Error, OSError, ValueError):
-            msg_proc.cpu = 0.0
-
-        try:
             mi = p.memory_info()
             msg_proc.mem_rss = int(mi.rss // 1024)
             msg_proc.mem_vms = int(mi.vms // 1024)
-        except (psutil.Error, OSError, ValueError):
-            msg_proc.mem_rss = 0
-            msg_proc.mem_vms = 0
-
-        try:
             msg_proc.priority = int(self._htop_priority(pid))
-        except (psutil.Error, OSError, ValueError):
-            msg_proc.priority = 0
-
-        try:
             msg_proc.ppid = int(p.ppid())
-        except (psutil.Error, OSError, ValueError):
-            msg_proc.ppid = -1
-
-        try:
             msg_proc.runtime = int(time.time() - p.create_time())
-        except (psutil.Error, OSError, ValueError):
-            msg_proc.runtime = 0
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            # Process disappeared — zero everything not yet set
+            self._zero_proc_metrics(msg_proc)
+        except (psutil.Error, OSError, ValueError) as e:
+            logging.debug("Metrics collection partial failure for pid %d: %s", pid, e)
 
     def publish_host_procs(self) -> None:
         """Publish process-level telemetry for all managed processes."""
@@ -1103,18 +1096,18 @@ class Agent:
             msg_proc = proc_info_t()
 
             msg_proc.name = process_name
-            msg_proc.group = proc_info["group"]
+            msg_proc.group = proc_info.group
             msg_proc.hostname = self.hostname
-            msg_proc.state = proc_info["state"]
-            msg_proc.status = STATE_DISPLAY.get(proc_info["state"], "Ready").lower()
-            msg_proc.errors = proc_info["errors"]
-            msg_proc.exec_command = proc_info["exec_command"]
-            msg_proc.auto_restart = proc_info["auto_restart"]
-            msg_proc.realtime = proc_info["realtime"]
-            msg_proc.isolated = proc_info.get("isolated", False)
-            msg_proc.exit_code = int(proc_info["exit_code"])
+            msg_proc.state = proc_info.state
+            msg_proc.status = STATE_DISPLAY.get(proc_info.state, "Ready").lower()
+            msg_proc.errors = proc_info.errors
+            msg_proc.exec_command = proc_info.exec_command
+            msg_proc.auto_restart = proc_info.auto_restart
+            msg_proc.realtime = proc_info.realtime
+            msg_proc.isolated = proc_info.isolated
+            msg_proc.exit_code = int(proc_info.exit_code)
 
-            proc = proc_info["proc"]
+            proc = proc_info.proc
             if proc is not None and is_running(proc):
                 pid = int(proc.pid)
                 msg_proc.pid = pid
@@ -1138,8 +1131,8 @@ class Agent:
         remaining bytes stay in the buffer and are sent on the next cycle.
         """
         for process_name, proc_info in self.processes.items():
-            stdout = proc_info["stdout"]
-            stderr = proc_info["stderr"]
+            stdout = proc_info.stdout
+            stderr = proc_info.stderr
             if not stdout and not stderr:
                 continue
 
@@ -1150,7 +1143,7 @@ class Agent:
             msg.timestamp = int(time.time() * 1e6)
             msg.name = process_name
             msg.hostname = self.hostname
-            msg.group = proc_info["group"]
+            msg.group = proc_info.group
             msg.stdout = stdout_chunk
             msg.stderr = stderr_chunk
             try:
@@ -1160,8 +1153,8 @@ class Agent:
                 self._handle_lcm_error(e)
                 return  # stop publishing this cycle; LCM will be reinitialized
 
-            proc_info["stdout"] = stdout[len(stdout_chunk):]
-            proc_info["stderr"] = stderr[len(stderr_chunk):]
+            proc_info.stdout = stdout[len(stdout_chunk):]
+            proc_info.stderr = stderr[len(stderr_chunk):]
 
     def _group_matches(self, process_group: str, target_group: str | None) -> bool:
         pg = (process_group or "").strip()
@@ -1173,13 +1166,13 @@ class Agent:
     def start_group(self, group: str | None) -> None:
         """Start all processes that belong to a named group."""
         for name, info in self.processes.items():
-            if self._group_matches(info.get("group", ""), group):
+            if self._group_matches(info.group, group):
                 self.start_process(name)
 
     def stop_group(self, group: str | None) -> None:
         """Stop all processes that belong to a named group."""
         for name, info in self.processes.items():
-            if self._group_matches(info.get("group", ""), group):
+            if self._group_matches(info.group, group):
                 self.stop_process(name)
 
     def set_persistence(self, value_str: str) -> None:

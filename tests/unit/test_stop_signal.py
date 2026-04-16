@@ -47,8 +47,8 @@ def test_stop_sends_configured_signal(agent_with_sigint):
     mock_proc.pid = 12345
     mock_proc.poll.return_value = None
     mock_proc.returncode = 0
-    agent.processes["test"]["proc"] = mock_proc
-    agent.processes["test"]["state"] = "R"
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].state = "R"
 
     with patch.object(agent, "_kill_process_group", return_value=True) as mock_kill:
         agent.stop_process("test")

@@ -12,12 +12,12 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "dpm.yaml"
 def test_create_stores_work_dir(agent):
     agent.create_process("test", "echo hi", False, False, "grp",
                          work_dir="/tmp")
-    assert agent.processes["test"]["work_dir"] == "/tmp"
+    assert agent.processes["test"].work_dir == "/tmp"
 
 
 def test_create_default_work_dir(agent):
     agent.create_process("test", "echo hi", False, False, "grp")
-    assert agent.processes["test"]["work_dir"] == ""
+    assert agent.processes["test"].work_dir == ""
 
 
 def test_start_with_valid_work_dir(agent, tmp_path):
@@ -41,8 +41,8 @@ def test_start_with_invalid_work_dir(agent):
     agent.create_process("test", "echo hi", False, False, "grp",
                          work_dir="/nonexistent/path/xyz")
     agent.start_process("test")
-    assert agent.processes["test"]["state"] == STATE_FAILED
-    assert "does not exist" in agent.processes["test"]["errors"]
+    assert agent.processes["test"].state == STATE_FAILED
+    assert "does not exist" in agent.processes["test"].errors
 
 
 def test_start_without_work_dir_no_cwd(agent):

@@ -42,22 +42,22 @@ def test_suspended_after_max_restarts(agent_with_max_restarts):
     # Simulate a running process that has exited — state must be RUNNING
     # so monitor_process proceeds past the early-return guard.
     from dpm.constants import STATE_RUNNING
-    agent.processes["test"]["state"] = STATE_RUNNING
-    agent.processes["test"]["auto_restart"] = True
-    agent.processes["test"]["restart_count"] = 3
-    agent.processes["test"]["last_restart_time"] = 0.0
-    agent.processes["test"]["exit_code"] = 1
+    agent.processes["test"].state = STATE_RUNNING
+    agent.processes["test"].auto_restart = True
+    agent.processes["test"].restart_count = 3
+    agent.processes["test"].last_restart_time = 0.0
+    agent.processes["test"].exit_code = 1
 
     # Mock the proc as not running (exited)
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
-    agent.processes["test"]["proc"] = mock_proc
-    agent.processes["test"]["output_lock"] = MagicMock()
-    agent.processes["test"]["stdout_lines"] = []
-    agent.processes["test"]["stderr_lines"] = []
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].output_lock = MagicMock()
+    agent.processes["test"].stdout_lines = []
+    agent.processes["test"].stderr_lines = []
 
     agent.monitor_process("test")
-    assert agent.processes["test"]["state"] == STATE_SUSPENDED
+    assert agent.processes["test"].state == STATE_SUSPENDED
 
 
 def test_restart_below_max_not_suspended(agent_with_max_restarts):
@@ -66,24 +66,24 @@ def test_restart_below_max_not_suspended(agent_with_max_restarts):
     agent = agent_with_max_restarts
     agent.create_process("test", "false", True, False, "grp")
 
-    agent.processes["test"]["state"] = STATE_RUNNING
-    agent.processes["test"]["auto_restart"] = True
-    agent.processes["test"]["restart_count"] = 1  # below max of 3
-    agent.processes["test"]["last_restart_time"] = 0.0
-    agent.processes["test"]["exit_code"] = 1
+    agent.processes["test"].state = STATE_RUNNING
+    agent.processes["test"].auto_restart = True
+    agent.processes["test"].restart_count = 1  # below max of 3
+    agent.processes["test"].last_restart_time = 0.0
+    agent.processes["test"].exit_code = 1
 
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
-    agent.processes["test"]["proc"] = mock_proc
-    agent.processes["test"]["output_lock"] = MagicMock()
-    agent.processes["test"]["stdout_lines"] = []
-    agent.processes["test"]["stderr_lines"] = []
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].output_lock = MagicMock()
+    agent.processes["test"].stdout_lines = []
+    agent.processes["test"].stderr_lines = []
 
     with patch.object(agent, "start_process") as mock_start:
         agent.monitor_process("test")
         mock_start.assert_called_once_with("test")
 
-    assert agent.processes["test"]["state"] != STATE_SUSPENDED
+    assert agent.processes["test"].state != STATE_SUSPENDED
 
 
 def test_manual_start_clears_suspended(agent_with_max_restarts):
@@ -92,9 +92,9 @@ def test_manual_start_clears_suspended(agent_with_max_restarts):
     agent = agent_with_max_restarts
     agent.create_process("test", "echo hi", True, False, "grp")
 
-    agent.processes["test"]["state"] = STATE_SUSPENDED
-    agent.processes["test"]["restart_count"] = 10
-    agent.processes["test"]["last_restart_time"] = 99999.0
+    agent.processes["test"].state = STATE_SUSPENDED
+    agent.processes["test"].restart_count = 10
+    agent.processes["test"].last_restart_time = 99999.0
 
     with patch("dpm.agent.agent.psutil.Popen") as mock_popen:
         mock_proc = MagicMock()
@@ -104,8 +104,8 @@ def test_manual_start_clears_suspended(agent_with_max_restarts):
 
         agent.start_process("test")
 
-    assert agent.processes["test"]["restart_count"] == 0
-    assert agent.processes["test"]["last_restart_time"] == 0.0
+    assert agent.processes["test"].restart_count == 0
+    assert agent.processes["test"].last_restart_time == 0.0
 
 
 def test_unlimited_restarts_when_minus_one(agent):
@@ -113,20 +113,20 @@ def test_unlimited_restarts_when_minus_one(agent):
     from dpm.constants import STATE_RUNNING, STATE_SUSPENDED
     agent.create_process("test", "false", True, False, "grp")
 
-    agent.processes["test"]["state"] = STATE_RUNNING
-    agent.processes["test"]["auto_restart"] = True
-    agent.processes["test"]["restart_count"] = 9999
-    agent.processes["test"]["last_restart_time"] = 0.0
-    agent.processes["test"]["exit_code"] = 1
+    agent.processes["test"].state = STATE_RUNNING
+    agent.processes["test"].auto_restart = True
+    agent.processes["test"].restart_count = 9999
+    agent.processes["test"].last_restart_time = 0.0
+    agent.processes["test"].exit_code = 1
 
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
-    agent.processes["test"]["proc"] = mock_proc
-    agent.processes["test"]["output_lock"] = MagicMock()
-    agent.processes["test"]["stdout_lines"] = []
-    agent.processes["test"]["stderr_lines"] = []
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].output_lock = MagicMock()
+    agent.processes["test"].stdout_lines = []
+    agent.processes["test"].stderr_lines = []
 
     with patch.object(agent, "start_process"):
         agent.monitor_process("test")
 
-    assert agent.processes["test"]["state"] != STATE_SUSPENDED
+    assert agent.processes["test"].state != STATE_SUSPENDED

@@ -57,7 +57,7 @@ def test_start_process_continues_on_cgroup_failure(agent):
 
         agent.start_process("test")
 
-        assert agent.processes["test"]["state"] == STATE_RUNNING
+        assert agent.processes["test"].state == STATE_RUNNING
 
 
 def test_stop_process_calls_cleanup_cgroup(agent):
@@ -69,8 +69,8 @@ def test_stop_process_calls_cleanup_cgroup(agent):
     mock_proc.pid = 123
     mock_proc.poll.return_value = None
     mock_proc.returncode = 0
-    agent.processes["test"]["proc"] = mock_proc
-    agent.processes["test"]["state"] = "R"
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].state = "R"
 
     with patch("dpm.agent.agent.cleanup_cgroup") as mock_cleanup, \
          patch.object(agent, "_kill_process_group", return_value=True):

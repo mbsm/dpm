@@ -33,15 +33,15 @@ def test_create_start_stop_delete(real_agent):
     real_agent.create_process("it_sleep", "sleep 100", False, False, "integration")
 
     real_agent.start_process("it_sleep")
-    assert real_agent.processes["it_sleep"]["state"] == STATE_RUNNING
-    assert real_agent.processes["it_sleep"]["proc"] is not None
+    assert real_agent.processes["it_sleep"].state == STATE_RUNNING
+    assert real_agent.processes["it_sleep"].proc is not None
 
-    pid = real_agent.processes["it_sleep"]["proc"].pid
+    pid = real_agent.processes["it_sleep"].proc.pid
     assert psutil.pid_exists(pid)
 
     real_agent.stop_process("it_sleep")
-    assert real_agent.processes["it_sleep"]["state"] in (STATE_READY, STATE_KILLED)
-    assert real_agent.processes["it_sleep"]["proc"] is None
+    assert real_agent.processes["it_sleep"].state in (STATE_READY, STATE_KILLED)
+    assert real_agent.processes["it_sleep"].proc is None
 
     # PID should be gone (or zombie which psutil also handles)
     try:
@@ -69,10 +69,10 @@ def test_auto_restart_on_natural_exit(real_agent):
     # monitor_process detects the exit and restarts
     real_agent.monitor_process("it_echo")
 
-    assert real_agent.processes["it_echo"]["state"] == STATE_RUNNING
+    assert real_agent.processes["it_echo"].state == STATE_RUNNING
 
     # Clean up
-    real_agent.processes["it_echo"]["auto_restart"] = False
+    real_agent.processes["it_echo"].auto_restart = False
     real_agent.stop_process("it_echo")
     real_agent.delete_process("it_echo")
 
@@ -89,7 +89,7 @@ def test_stop_kills_process_group(real_agent):
     real_agent.start_process("it_parent")
     time.sleep(0.3)  # let bash fork the child
 
-    proc = real_agent.processes["it_parent"]["proc"]
+    proc = real_agent.processes["it_parent"].proc
     parent_pid = proc.pid
 
     # Collect child PIDs before stopping
@@ -139,7 +139,7 @@ def test_stdout_captured_in_buffer(real_agent):
     # monitor_process while still running → drains stdout_lines into proc_info["stdout"]
     real_agent.monitor_process("it_output")
 
-    assert "captured_line" in real_agent.processes["it_output"]["stdout"]
+    assert "captured_line" in real_agent.processes["it_output"].stdout
 
     real_agent.stop_process("it_output")
     real_agent.delete_process("it_output")
@@ -152,10 +152,10 @@ def test_stdout_captured_in_buffer(real_agent):
 def test_double_start_is_noop(real_agent):
     real_agent.create_process("it_double", "sleep 100", False, False, "integration")
     real_agent.start_process("it_double")
-    pid_first = real_agent.processes["it_double"]["proc"].pid
+    pid_first = real_agent.processes["it_double"].proc.pid
 
     real_agent.start_process("it_double")  # should be a no-op
-    pid_second = real_agent.processes["it_double"]["proc"].pid
+    pid_second = real_agent.processes["it_double"].proc.pid
 
     assert pid_first == pid_second  # same process, no re-spawn
 

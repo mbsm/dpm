@@ -11,8 +11,8 @@ from dpm_msgs import proc_output_t
 
 def _setup_proc(agent, name="p1", stdout="", stderr=""):
     agent.create_process(name, "cmd", False, False, "")
-    agent.processes[name]["stdout"] = stdout
-    agent.processes[name]["stderr"] = stderr
+    agent.processes[name].stdout = stdout
+    agent.processes[name].stderr = stderr
     agent.lc.publish.reset_mock()
 
 
@@ -30,8 +30,8 @@ def test_publishes_small_stdout_and_clears_buffer(agent):
     _setup_proc(agent, stdout="hello", stderr="err")
     agent.publish_procs_outputs()
     agent.lc.publish.assert_called_once()
-    assert agent.processes["p1"]["stdout"] == ""
-    assert agent.processes["p1"]["stderr"] == ""
+    assert agent.processes["p1"].stdout == ""
+    assert agent.processes["p1"].stderr == ""
 
 
 def test_chunks_stdout_to_max_output_chunk(agent):
@@ -48,7 +48,7 @@ def test_remainder_stays_in_buffer_after_chunk(agent):
     big = "x" * (MAX_OUTPUT_CHUNK + 100)
     _setup_proc(agent, stdout=big)
     agent.publish_procs_outputs()
-    assert len(agent.processes["p1"]["stdout"]) == 100
+    assert len(agent.processes["p1"].stdout) == 100
 
 
 def test_second_publish_drains_remainder(agent):
@@ -56,7 +56,7 @@ def test_second_publish_drains_remainder(agent):
     _setup_proc(agent, stdout=big)
     agent.publish_procs_outputs()
     agent.publish_procs_outputs()
-    assert agent.processes["p1"]["stdout"] == ""
+    assert agent.processes["p1"].stdout == ""
 
 
 def test_chunks_stderr_independently(agent):
@@ -67,12 +67,12 @@ def test_chunks_stderr_independently(agent):
     _, encoded = agent.lc.publish.call_args[0]
     msg = proc_output_t.decode(encoded)
     assert len(msg.stderr) == MAX_OUTPUT_CHUNK
-    assert len(agent.processes["p1"]["stderr"]) == 200
+    assert len(agent.processes["p1"].stderr) == 200
 
 
 def test_published_message_carries_correct_metadata(agent):
     agent.create_process("myproc", "cmd", False, False, "mygrp")
-    agent.processes["myproc"]["stdout"] = "data"
+    agent.processes["myproc"].stdout = "data"
     agent.lc.publish.reset_mock()
     agent.publish_procs_outputs()
 
@@ -144,18 +144,18 @@ def test_monitor_process_drains_stdout_lines_to_buffer(agent):
     agent.create_process("p1", "sleep 100", False, False, "")
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None  # still running
-    agent.processes["p1"]["proc"] = fake_proc
-    agent.processes["p1"]["state"] = STATE_RUNNING
+    agent.processes["p1"].proc = fake_proc
+    agent.processes["p1"].state = STATE_RUNNING
 
     # Simulate reader thread having accumulated lines (normally set by start_process)
-    agent.processes["p1"]["output_lock"] = threading.Lock()
-    agent.processes["p1"]["stdout_lines"] = ["line1\n", "line2\n"]
-    agent.processes["p1"]["stderr_lines"] = []
+    agent.processes["p1"].output_lock = threading.Lock()
+    agent.processes["p1"].stdout_lines = ["line1\n", "line2\n"]
+    agent.processes["p1"].stderr_lines = []
 
     agent.monitor_process("p1")
 
-    assert agent.processes["p1"]["stdout"] == "line1\nline2\n"
-    assert agent.processes["p1"]["stdout_lines"] == []
+    assert agent.processes["p1"].stdout == "line1\nline2\n"
+    assert agent.processes["p1"].stdout_lines == []
 
 
 def test_monitor_process_skips_if_not_running(agent):

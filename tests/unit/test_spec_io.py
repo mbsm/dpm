@@ -56,7 +56,8 @@ def test_save_single_spec_creates_file(tmp_path):
     spec = _make_spec()
     save_process_spec(path, spec)
     data = yaml.safe_load(open(path))
-    assert data["name"] == "p1"
+    assert isinstance(data, list)
+    assert data[0]["name"] == "p1"
 
 
 def test_save_append_to_missing_file_creates_list(tmp_path):
@@ -64,8 +65,9 @@ def test_save_append_to_missing_file_creates_list(tmp_path):
     spec = _make_spec()
     save_process_spec(path, spec, append=True)
     data = yaml.safe_load(open(path))
-    # No existing file → single spec written
-    assert data["name"] == "p1"
+    # No existing file → single-item list
+    assert isinstance(data, list)
+    assert data[0]["name"] == "p1"
 
 
 def test_save_append_to_existing_list(tmp_path):
@@ -295,9 +297,10 @@ def test_save_all_includes_new_fields():
         assert written == 1
         with open(path) as f:
             data = yaml.safe_load(f)
-        assert data["work_dir"] == "/opt/robot"
-        assert data["cpuset"] == "0,1"
-        assert data["cpu_limit"] == 1.5
-        assert data["mem_limit"] == 1073741824
+        assert isinstance(data, list)
+        assert data[0]["work_dir"] == "/opt/robot"
+        assert data[0]["cpuset"] == "0,1"
+        assert data[0]["cpu_limit"] == 1.5
+        assert data[0]["mem_limit"] == 1073741824
     finally:
         os.unlink(path)

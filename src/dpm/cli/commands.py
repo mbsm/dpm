@@ -114,15 +114,26 @@ def cmd_hosts(supervisor, args) -> int:
     return 0
 
 
-def cmd_start(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
-        return _no_agents()
+def _require_proc(supervisor, args):
+    """Common preamble: wait for telemetry, validate process exists.
 
+    Returns (name, host) on success, or None and prints an error.
+    """
+    if not wait_for_telemetry(supervisor):
+        _no_agents()
+        return None
     name, host = args.name, args.host
     if (host, name) not in supervisor.procs:
-        print(f"Process '{name}@{host}' not found. Use 'dpm status' to see available processes.",
-              file=sys.stderr)
+        print(f"Process '{name}@{host}' not found.", file=sys.stderr)
+        return None
+    return name, host
+
+
+def cmd_start(supervisor, args) -> int:
+    result = _require_proc(supervisor, args)
+    if result is None:
         return 1
+    name, host = result
 
     supervisor.start_proc(name, host)
     confirmed = wait_for_state(supervisor, name, host, target="R")
@@ -134,13 +145,10 @@ def cmd_start(supervisor, args) -> int:
 
 
 def cmd_stop(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
-        return _no_agents()
-
-    name, host = args.name, args.host
-    if (host, name) not in supervisor.procs:
-        print(f"Process '{name}@{host}' not found.", file=sys.stderr)
+    result = _require_proc(supervisor, args)
+    if result is None:
         return 1
+    name, host = result
 
     supervisor.stop_proc(name, host)
     confirmed = wait_for_state(supervisor, name, host, not_target="R")
@@ -152,13 +160,10 @@ def cmd_stop(supervisor, args) -> int:
 
 
 def cmd_restart(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
-        return _no_agents()
-
-    name, host = args.name, args.host
-    if (host, name) not in supervisor.procs:
-        print(f"Process '{name}@{host}' not found.", file=sys.stderr)
+    result = _require_proc(supervisor, args)
+    if result is None:
         return 1
+    name, host = result
 
     supervisor.stop_proc(name, host)
     wait_for_state(supervisor, name, host, not_target="R", timeout=5.0)
@@ -191,13 +196,10 @@ def cmd_create(supervisor, args) -> int:
 
 
 def cmd_delete(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
-        return _no_agents()
-
-    name, host = args.name, args.host
-    if (host, name) not in supervisor.procs:
-        print(f"Process '{name}@{host}' not found.", file=sys.stderr)
+    result = _require_proc(supervisor, args)
+    if result is None:
         return 1
+    name, host = result
 
     supervisor.stop_proc(name, host)
     wait_for_state(supervisor, name, host, not_target="R", timeout=3.0)

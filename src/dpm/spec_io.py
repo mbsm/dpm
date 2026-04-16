@@ -30,8 +30,7 @@ def _merge_and_write(path: str, new_items: List[Dict[str, Any]], append: bool) -
         else:
             out = new_items
     else:
-        # Single item written as dict for readability; multiple items as list
-        out = new_items[0] if len(new_items) == 1 else new_items
+        out = new_items
 
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(out, f, sort_keys=False)
