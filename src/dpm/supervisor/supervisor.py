@@ -63,6 +63,7 @@ class Supervisor:
         self._hosts_lock = threading.Lock()
         self._procs_lock = threading.Lock()
         self._outputs_lock = threading.Lock()
+        self._lcm_lock = threading.Lock()
 
         # data (hostname -> host_info_t)
         self._hosts: Dict[str, host_info_t] = {}
@@ -133,12 +134,13 @@ class Supervisor:
         time.sleep(delay)
         self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
 
-        try:
-            self._init_lcm()
-            self._lcm_backoff_s = 0.25
-            logging.info("Supervisor LCM reinitialized successfully.")
-        except (OSError, RuntimeError) as e2:
-            logging.exception("Supervisor LCM reinit failed: %s", e2)
+        with self._lcm_lock:
+            try:
+                self._init_lcm()
+                self._lcm_backoff_s = 0.25
+                logging.info("Supervisor LCM reinitialized successfully.")
+            except (OSError, RuntimeError) as e2:
+                logging.exception("Supervisor LCM reinit failed: %s", e2)
 
     # -----------------
     # LCM handlers (background thread)
@@ -278,7 +280,11 @@ class Supervisor:
             logging.error("Publish failed, reconnecting: %s", e)
             self._reconnect_lcm(e)
             # Retry once after reconnect
-            self.lc_pub.publish(self.command_channel, msg.encode())
+            try:
+                if self.lc_pub is not None:
+                    self.lc_pub.publish(self.command_channel, msg.encode())
+            except (OSError, AttributeError) as e2:
+                logging.error("Publish retry also failed: %s", e2)
 
     def _send_command(
         self,

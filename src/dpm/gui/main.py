@@ -33,7 +33,9 @@ def main() -> None:
 
     window = MainWindow(supervisor)
     window.show()
-    sys.exit(app.exec_())
+    ret = app.exec_()
+    supervisor.stop()
+    sys.exit(ret)
 
 
 if __name__ == "__main__":

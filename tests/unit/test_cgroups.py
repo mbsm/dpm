@@ -51,11 +51,14 @@ def test_setup_cgroup_skips_unset_limits(tmp_path):
 
 
 def test_cleanup_cgroup_removes_dir(tmp_path):
-    """cleanup_cgroup removes the cgroup directory."""
+    """cleanup_cgroup removes the cgroup directory.
+
+    On a real cgroupfs, os.rmdir works because the kernel removes pseudo-files.
+    In tests we use an empty directory to simulate this behavior.
+    """
     from dpm.agent.cgroups import cleanup_cgroup
     cgroup_dir = tmp_path / "myproc"
     cgroup_dir.mkdir()
-    (cgroup_dir / "cgroup.procs").write_text("")
 
     with patch("dpm.agent.cgroups.CGROUP_BASE", str(tmp_path)):
         cleanup_cgroup("myproc")

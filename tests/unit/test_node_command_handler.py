@@ -55,7 +55,8 @@ def test_routes_create_process(agent):
                  exec_cmd="sleep 1", auto_restart=True, realtime=False),
         )
     mock.assert_called_once_with("p1", "sleep 1", True, False, "grp",
-                                    work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0)
+                                    work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
+                                    isolated=False)
 
 
 def test_routes_start_process(agent):

@@ -5,7 +5,7 @@ import os
 import threading
 import time
 
-from PyQt5.QtCore import QSize, Qt, QTimer
+from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFontMetrics, QPalette
 from PyQt5.QtWidgets import (
     QAction,
@@ -136,6 +136,10 @@ class HostCard(QFrame):
 
 
 class MainWindow(QMainWindow):
+    # Signals for thread-safe launch status updates
+    _launch_text_changed = pyqtSignal(str)
+    _launch_finished = pyqtSignal(bool, str)  # (is_error, result_text)
+
     def __init__(self, supervisor, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.supervisor = supervisor
@@ -302,6 +306,17 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_all)
         self.timer.start(1000)
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        for w in list(self.output_windows.values()):
+            try:
+                w.close()
+            except RuntimeError:
+                pass
+        self.output_windows.clear()
+        self.supervisor.stop()
+        super().closeEvent(event)
 
     def _ensure_min_width(self):
         total = 0
@@ -1228,74 +1243,69 @@ class MainWindow(QMainWindow):
         if reverse:
             waves = list(reversed(waves))
 
-        # Shared state between worker thread and GUI timer
-        self._launch_status = {"text": f"{mode}: {script['name']}\n\nStarting...",
-                               "done": False, "error": False, "result": ""}
-        self._launch_mode = mode
-
         # Build progress dialog
         dlg = QDialog(self)
         dlg.setWindowTitle(mode)
         dlg.setMinimumWidth(400)
         dlg_layout = QVBoxLayout(dlg)
-        dlg_label = QLabel(self._launch_status["text"])
+        dlg_label = QLabel(f"{mode}: {script['name']}\n\nStarting...")
         dlg_label.setWordWrap(True)
         dlg_layout.addWidget(dlg_label)
 
-        # Poll timer to update label from thread state
-        poll_timer = QTimer(dlg)
-        def _poll():
-            dlg_label.setText(self._launch_status["text"])
-            if self._launch_status["done"]:
-                poll_timer.stop()
-                dlg.accept()
-        poll_timer.timeout.connect(_poll)
-        poll_timer.start(200)
+        # Track result from worker thread via signals
+        self._launch_result_error = False
+        self._launch_result_text = ""
+
+        # Connect signals to dialog updates (thread-safe via Qt event loop)
+        self._launch_text_changed.connect(dlg_label.setText)
+        def _on_finished(is_error, result_text):
+            self._launch_result_error = is_error
+            self._launch_result_text = result_text
+            dlg.accept()
+        self._launch_finished.connect(_on_finished)
 
         # Start worker thread
         thread = threading.Thread(
             target=self._launch_worker,
-            args=(script, waves, reverse),
+            args=(script, waves, reverse, mode),
             daemon=True,
         )
         thread.start()
 
-        # exec_ blocks here but the poll timer keeps the dialog responsive
+        # exec_ blocks here; signals keep the dialog responsive
         dlg.exec_()
-        poll_timer.stop()
+
+        # Disconnect signals to avoid stale references
+        self._launch_text_changed.disconnect(dlg_label.setText)
+        self._launch_finished.disconnect(_on_finished)
 
         self.refresh_processes_in_place()
 
-        result = self._launch_status["result"]
-        if self._launch_status["error"]:
-            QMessageBox.critical(self, f"{mode} Failed", result)
-        elif result:
-            QMessageBox.warning(self, f"{mode} Complete", result)
+        if self._launch_result_error:
+            QMessageBox.critical(self, f"{mode} Failed", self._launch_result_text)
+        elif self._launch_result_text:
+            QMessageBox.warning(self, f"{mode} Complete", self._launch_result_text)
         else:
             QMessageBox.information(self, mode, f"{mode} complete.")
 
-    def _launch_worker(self, script, waves, reverse):
-        """Runs in a background thread — updates self._launch_status dict."""
+    def _launch_worker(self, script, waves, reverse, mode):
+        """Runs in a background thread — emits signals for thread-safe GUI updates."""
         from dpm.cli.launch import (
             _start_group, _stop_group,
             _wait_group_running, _wait_group_stopped, _create_processes,
         )
 
-        mode = "Shutdown" if reverse else "Launch"
         groups = script["groups"]
         timeout = script["timeout"]
         total_waves = len(waves)
         name = script["name"]
-        status = self._launch_status
 
         try:
             if not reverse and script["processes"]:
-                status["text"] = f"{mode}: {name}\n\nCreating processes..."
+                self._launch_text_changed.emit(f"{mode}: {name}\n\nCreating processes...")
                 errors = _create_processes(self.supervisor, script["processes"])
                 if errors:
-                    status["result"] = f"{errors} process(es) failed to create."
-                    status["error"] = True
-                    status["done"] = True
+                    self._launch_finished.emit(True, f"{errors} process(es) failed to create.")
                     return
                 time.sleep(1)
 
@@ -1310,7 +1320,7 @@ class MainWindow(QMainWindow):
                 for j in range(i + 1, total_waves):
                     next_label = ", ".join(waves[j])
                     lines.append(f"  Wave {j+1}/{total_waves}: {next_label}")
-                status["text"] = "\n".join(lines)
+                self._launch_text_changed.emit("\n".join(lines))
 
                 if reverse:
                     for g in wave:
@@ -1331,22 +1341,20 @@ class MainWindow(QMainWindow):
                                     if g in groups[lg].get("requires", []):
                                         dependents.append(lg)
                             if dependents:
-                                status["result"] = (
+                                self._launch_finished.emit(
+                                    True,
                                     f"Group '{g}' failed to start.\n"
                                     f"Not running: {', '.join(failed)}\n\n"
                                     f"Required by: {', '.join(dependents)}"
                                 )
-                                status["error"] = True
-                                status["done"] = True
                                 return
                             failed_groups.append((g, failed))
 
+            result = ""
             if failed_groups:
                 details = "\n".join(f"  {g}: {', '.join(f)}" for g, f in failed_groups)
-                status["result"] = f"{mode} finished with warnings:\n{details}"
-            status["done"] = True
+                result = f"{mode} finished with warnings:\n{details}"
+            self._launch_finished.emit(False, result)
 
         except Exception as e:
-            status["result"] = str(e)
-            status["error"] = True
-            status["done"] = True
+            self._launch_finished.emit(True, str(e))

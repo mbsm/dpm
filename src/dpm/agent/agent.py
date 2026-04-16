@@ -646,7 +646,6 @@ class Agent:
             proc_info["proc"] = proc
             proc_info["state"] = STATE_RUNNING
             proc_info["errors"] = ""
-            proc_info["restart_count"] = 0
 
             # Start threads to read stdout and stderr.
             # A single lock guards both lists so the drain in monitor_process
@@ -829,6 +828,36 @@ class Agent:
             )
             return False
 
+    def _check_auto_restart(self, process_name: str, proc_info: dict) -> None:
+        """Check backoff timer and restart a failed process if ready.
+
+        Called both when a process first fails and on subsequent monitor
+        cycles while waiting for the backoff period to elapse.
+        """
+        restart_count = proc_info.get("restart_count", 0)
+
+        # Circuit breaker: suspend if max restarts exceeded
+        if self.max_restarts >= 0 and restart_count >= self.max_restarts:
+            proc_info["state"] = STATE_SUSPENDED
+            logging.warning(
+                "Monitor Process: Process %s suspended after %d restart attempts.",
+                process_name, restart_count,
+            )
+            return
+
+        elapsed = time.monotonic() - proc_info.get("last_restart_time", 0.0)
+        backoff = min(2 ** restart_count, 60)
+        if elapsed < backoff:
+            return  # wait for backoff period — will re-enter on next monitor cycle
+
+        proc_info["restart_count"] = restart_count + 1
+        proc_info["last_restart_time"] = time.monotonic()
+        logging.info(
+            "Monitor Process: Restarting process %s (attempt %d, backoff %.0fs).",
+            process_name, restart_count + 1, backoff,
+        )
+        self.start_process(process_name)
+
     def monitor_process(self, process_name) -> None:
         """Monitor a running process and publish any buffered output."""
         if process_name not in self.processes:
@@ -840,6 +869,11 @@ class Agent:
 
         proc_info = self.processes[process_name]
         proc = proc_info["proc"]
+
+        # Re-entry for backoff: process already failed, waiting to restart
+        if proc is None and proc_info["state"] == STATE_FAILED and proc_info["auto_restart"]:
+            self._check_auto_restart(process_name, proc_info)
+            return
 
         # Nothing to monitor if not running
         if proc is None or proc_info["state"] != STATE_RUNNING:
@@ -857,6 +891,7 @@ class Agent:
                     process_name,
                 )
                 proc_info["state"] = STATE_READY
+                proc_info["restart_count"] = 0
             else:
                 logging.warning(
                     "Monitor Process: Process %s failed with exit code: %s",
@@ -897,28 +932,7 @@ class Agent:
 
             # Auto-restart only on failure (non-zero exit), with exponential backoff
             if proc_info["auto_restart"] and exit_code != 0:
-                restart_count = proc_info.get("restart_count", 0)
-
-                # Circuit breaker: suspend if max restarts exceeded
-                if self.max_restarts >= 0 and restart_count >= self.max_restarts:
-                    proc_info["state"] = STATE_SUSPENDED
-                    logging.warning(
-                        "Monitor Process: Process %s suspended after %d restart attempts.",
-                        process_name, restart_count,
-                    )
-                    return
-
-                elapsed = time.monotonic() - proc_info.get("last_restart_time", 0.0)
-                backoff = min(2 ** restart_count, 60)
-                if elapsed < backoff:
-                    return  # wait for backoff period
-                proc_info["restart_count"] = restart_count + 1
-                proc_info["last_restart_time"] = time.monotonic()
-                logging.info(
-                    "Monitor Process: Restarting process %s (attempt %d, backoff %.0fs).",
-                    process_name, restart_count + 1, backoff,
-                )
-                self.start_process(process_name)
+                self._check_auto_restart(process_name, proc_info)
             return
 
         # Still running: pull any accumulated stream output into stdout/stderr buffers

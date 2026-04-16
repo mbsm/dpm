@@ -262,6 +262,7 @@ def test_load_and_create_forwards_new_fields(tmp_path):
     mock_sup.create_proc.assert_called_once_with(
         "foo", "echo", "", "h1", False, False,
         work_dir="/opt/robot", cpuset="0,1", cpu_limit=1.5, mem_limit=1073741824,
+        isolated=False,
     )
 
 

@@ -15,7 +15,6 @@ realtime scheduling provides low-preemption execution in practice.
 
 import logging
 import os
-import shutil
 
 # cpu.max period (microseconds) — standard 100ms scheduling period
 _CPU_PERIOD = 100_000
@@ -207,7 +206,7 @@ def cleanup_cgroup(name: str) -> None:
                         pass
         except OSError:
             pass
-        shutil.rmtree(cgroup_dir)
+        os.rmdir(cgroup_dir)
         logging.debug("Cgroup cleanup: removed %s", cgroup_dir)
     except OSError as e:
         logging.warning("Cgroup cleanup failed for %s: %s", name, e)

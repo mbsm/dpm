@@ -21,7 +21,8 @@ def test_start_process_calls_setup_cgroup(agent):
         agent.start_process("test")
 
         mock_setup.assert_called_once_with("test", 123, cpuset="0,1",
-                                           cpu_limit=1.5, mem_limit=1073741824)
+                                           cpu_limit=1.5, mem_limit=1073741824,
+                                           isolated=False)
 
 
 def test_start_process_skips_cgroup_when_no_limits(agent):

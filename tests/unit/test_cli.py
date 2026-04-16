@@ -204,13 +204,14 @@ def test_create_calls_supervisor(mock_wait, mock_state, supervisor, capsys):
     args = argparse.Namespace(
         command="create", name="svc", host="jet1",
         cmd="echo hi", group="core", auto_restart=True, realtime=False,
-        work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
+        isolated=False, work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
     )
     rc = commands.cmd_create(supervisor, args)
     assert rc == 0
     supervisor.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "jet1", True, False,
         work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
+        isolated=False,
     )
 
 
@@ -472,6 +473,7 @@ def test_create_forwards_new_fields_to_supervisor():
     args.group = "grp"
     args.auto_restart = False
     args.realtime = False
+    args.isolated = False
     args.work_dir = "/opt/robot"
     args.cpuset = "0,1"
     args.cpu_limit = 1.5
@@ -484,4 +486,5 @@ def test_create_forwards_new_fields_to_supervisor():
     mock_sup.create_proc.assert_called_once_with(
         "foo", "echo hi", "grp", "host1", False, False,
         work_dir="/opt/robot", cpuset="0,1", cpu_limit=1.5, mem_limit=1073741824,
+        isolated=False,
     )
