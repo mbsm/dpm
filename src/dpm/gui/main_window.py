@@ -861,6 +861,10 @@ class MainWindow(QMainWindow):
             auto_restart = bool(getattr(src_proc, "auto_restart", False))
             realtime = bool(getattr(src_proc, "realtime", False))
             isolated = bool(getattr(src_proc, "isolated", False))
+            work_dir = getattr(src_proc, "work_dir", "") or ""
+            cpuset = getattr(src_proc, "cpuset", "") or ""
+            cpu_limit = float(getattr(src_proc, "cpu_limit", 0.0) or 0.0)
+            mem_limit = int(getattr(src_proc, "mem_limit", 0) or 0)
             was_running = getattr(src_proc, "state", "") == "R"
 
             if was_running:
@@ -869,6 +873,8 @@ class MainWindow(QMainWindow):
             self.supervisor.create_proc(
                 proc_name, exec_command, group, dst_host,
                 auto_restart, realtime, isolated=isolated,
+                work_dir=work_dir, cpuset=cpuset,
+                cpu_limit=cpu_limit, mem_limit=mem_limit,
             )
 
             if was_running:

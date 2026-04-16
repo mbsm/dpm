@@ -67,6 +67,10 @@ class Supervisor:
 
         # data (hostname -> host_info_t)
         self._hosts: Dict[str, host_info_t] = {}
+        # last-seen monotonic timestamp per host (for stale eviction)
+        self._host_last_seen: Dict[str, float] = {}
+        # multiplier of report_interval before a host is considered offline
+        self._host_offline_factor = 3.0
 
         # data ((hostname, proc_name) -> proc_info_t)
         self._procs: Dict[Tuple[str, str], proc_info_t] = {}
@@ -153,6 +157,7 @@ class Supervisor:
             return
         with self._hosts_lock:
             self._hosts[msg.hostname] = msg
+            self._host_last_seen[msg.hostname] = time.monotonic()
 
     def host_procs_handler(self, _channel, data) -> None:
         try:
@@ -414,7 +419,29 @@ class Supervisor:
         if was_running:
             self.start()
 
+    def _evict_stale_hosts(self) -> None:
+        """Remove hosts that haven't reported within their expected interval."""
+        now = time.monotonic()
+        with self._hosts_lock:
+            stale = []
+            for hostname, last_seen in self._host_last_seen.items():
+                info = self._hosts.get(hostname)
+                interval = getattr(info, "report_interval", 2.0) if info else 2.0
+                if now - last_seen > interval * self._host_offline_factor:
+                    stale.append(hostname)
+            for hostname in stale:
+                del self._hosts[hostname]
+                del self._host_last_seen[hostname]
+                logging.info("Supervisor: evicted stale host %s", hostname)
+
+        if stale:
+            with self._procs_lock:
+                keys_to_remove = [k for k in self._procs if k[0] in stale]
+                for k in keys_to_remove:
+                    del self._procs[k]
+
     def _thread_func(self) -> None:
+        evict_counter = 0
         while self._running:
             if self.lc_sub is None:
                 time.sleep(0.2)
@@ -427,3 +454,9 @@ class Supervisor:
             except Exception as e:
                 logging.exception("Supervisor LCM handler error: %s", e)
                 time.sleep(0.2)
+
+            # Run eviction check every ~5 seconds (50 iterations × 100ms timeout)
+            evict_counter += 1
+            if evict_counter >= 50:
+                evict_counter = 0
+                self._evict_stale_hosts()

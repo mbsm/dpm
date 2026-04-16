@@ -26,12 +26,14 @@ _isolated_cores: dict[str, set[int]] = {}  # proc_name -> set of core IDs
 CGROUP_BASE: str = ""
 
 
-def _enable_subtree_controllers(base: str) -> None:
+def _enable_subtree_controllers(base: str) -> bool:
     """Enable cpuset, cpu, and memory controllers for child cgroups.
 
     The kernel requires that no processes sit directly in a cgroup before
     controllers can be enabled on it.  We move the current process (the
     agent) into a leaf child 'agent' first, then write to subtree_control.
+
+    Returns True if controllers were enabled successfully, False otherwise.
     """
     agent_leaf = os.path.join(base, "agent")
     try:
@@ -40,15 +42,17 @@ def _enable_subtree_controllers(base: str) -> None:
             f.write(str(os.getpid()))
     except OSError as e:
         logging.warning("Failed to move agent PID to leaf cgroup: %s", e)
-        return
+        return False
 
     ctrl_path = os.path.join(base, "cgroup.subtree_control")
     try:
         with open(ctrl_path, "w") as f:
             f.write("+cpuset +cpu +memory")
         logging.debug("Enabled subtree controllers at %s", base)
+        return True
     except OSError as e:
         logging.warning("Failed to enable subtree controllers at %s: %s", base, e)
+        return False
 
 
 def _resolve_cgroup_base() -> str:
@@ -71,9 +75,14 @@ def _resolve_cgroup_base() -> str:
                     rel = parts[2].lstrip("/")
                     candidate = os.path.join("/sys/fs/cgroup", rel)
                     if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+                        if not _enable_subtree_controllers(candidate):
+                            logging.warning(
+                                "Cgroup base %s found but subtree controllers "
+                                "could not be enabled; falling back.", candidate,
+                            )
+                            break
                         CGROUP_BASE = candidate
                         logging.info("Cgroup base (delegated): %s", CGROUP_BASE)
-                        _enable_subtree_controllers(CGROUP_BASE)
                         return CGROUP_BASE
     except OSError:
         pass

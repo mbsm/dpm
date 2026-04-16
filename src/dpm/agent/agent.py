@@ -658,6 +658,8 @@ class Agent:
             )
             stdout_thread.start()
             stderr_thread.start()
+            proc_info["stdout_thread"] = stdout_thread
+            proc_info["stderr_thread"] = stderr_thread
 
             logging.info(
                 "Start Process: Started process: %s with PID %s", process_name, proc.pid
@@ -758,6 +760,18 @@ class Agent:
 
         if proc_info["state"] == STATE_READY:
             logging.info("Stop Process: Process %s is already stopped.", process_name)
+            return
+
+        if not is_running(proc):
+            logging.info(
+                "Stop Process: Process %s (PID %s) already exited, updating state.",
+                process_name, proc.pid,
+            )
+            proc_info["proc"] = None
+            proc_info["ps_proc"] = None
+            proc_info["state"] = STATE_READY
+            proc_info["exit_code"] = proc.returncode if proc.returncode is not None else -1
+            cleanup_cgroup(process_name)
             return
 
         try:
@@ -899,6 +913,13 @@ class Agent:
                     exit_code,
                 )
                 proc_info["state"] = STATE_FAILED
+
+            # Wait for reader threads to finish so all pipe data is captured
+            for tkey in ("stdout_thread", "stderr_thread"):
+                t = proc_info.get(tkey)
+                if t is not None:
+                    t.join(timeout=2.0)
+                    proc_info[tkey] = None
 
             # Capture any remaining output
             output_lock = proc_info["output_lock"]

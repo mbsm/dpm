@@ -366,6 +366,10 @@ def cmd_move(supervisor, args) -> int:
     auto_restart = bool(getattr(src_proc, "auto_restart", False))
     realtime = bool(getattr(src_proc, "realtime", False))
     isolated = bool(getattr(src_proc, "isolated", False))
+    work_dir = getattr(src_proc, "work_dir", "") or ""
+    cpuset = getattr(src_proc, "cpuset", "") or ""
+    cpu_limit = float(getattr(src_proc, "cpu_limit", 0.0) or 0.0)
+    mem_limit = int(getattr(src_proc, "mem_limit", 0) or 0)
     was_running = getattr(src_proc, "state", "") == "R"
 
     label = f"{src_name}@{src_host} -> {dst_name}@{dst_host}"
@@ -381,7 +385,8 @@ def cmd_move(supervisor, args) -> int:
     # Step 2: Create on destination
     print(f"Creating {dst_name}@{dst_host}...")
     supervisor.create_proc(dst_name, exec_command, group, dst_host, auto_restart, realtime,
-                           isolated=isolated)
+                           isolated=isolated, work_dir=work_dir, cpuset=cpuset,
+                           cpu_limit=cpu_limit, mem_limit=mem_limit)
     wait_for_state(supervisor, dst_name, dst_host, target="T", timeout=5.0)
 
     # Verify it appeared
