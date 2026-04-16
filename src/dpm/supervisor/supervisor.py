@@ -420,7 +420,9 @@ class Supervisor:
     def _evict_stale_hosts(self) -> None:
         """Remove hosts that haven't reported within their expected interval."""
         now = time.monotonic()
-        with self._hosts_lock:
+        # Hold both locks to maintain the invariant that _hosts and _procs
+        # are consistent (no orphaned proc entries for evicted hosts).
+        with self._hosts_lock, self._procs_lock:
             stale = []
             for hostname, last_seen in self._host_last_seen.items():
                 info = self._hosts.get(hostname)
@@ -430,14 +432,9 @@ class Supervisor:
             for hostname in stale:
                 del self._hosts[hostname]
                 del self._host_last_seen[hostname]
+                for name in self._procs_by_host.pop(hostname, set()):
+                    self._procs.pop((hostname, name), None)
                 logging.info("Supervisor: evicted stale host %s", hostname)
-
-        if stale:
-            stale_set = set(stale)
-            with self._procs_lock:
-                for hostname in stale:
-                    for name in self._procs_by_host.pop(hostname, set()):
-                        self._procs.pop((hostname, name), None)
 
     def _thread_func(self) -> None:
         evict_counter = 0

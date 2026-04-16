@@ -123,7 +123,7 @@ class ProcessEntry:
     cpuset: str = ""
     cpu_limit: float = 0.0
     mem_limit: int = 0
-    state: str = "T"  # STATE_READY
+    state: str = STATE_READY
     errors: str = ""
     exit_code: int = -1
     stdout: str = ""
@@ -141,6 +141,17 @@ class ProcessEntry:
 
 class Agent:
     """LCM-based agent managing local processes and telemetry on a single host."""
+
+    # Class-level dispatch: action -> (method_name, msg_attribute)
+    _CMD_DISPATCH = {
+        "start_process": ("start_process", "name"),
+        "stop_process": ("stop_process", "name"),
+        "delete_process": ("delete_process", "name"),
+        "start_group": ("start_group", "group"),
+        "stop_group": ("stop_group", "group"),
+        "set_interval": ("set_interval", "exec_command"),
+        "set_persistence": ("set_persistence", "exec_command"),
+    }
 
     def __init__(self, config_file: str = "/etc/dpm/dpm.yaml"):
         self.config = self.load_config(config_file)
@@ -505,17 +516,6 @@ class Agent:
 
         action = msg.action
 
-        # Dispatch table for simple name/group/exec_command actions
-        _dispatch = {
-            "start_process": lambda: self.start_process(msg.name),
-            "stop_process": lambda: self.stop_process(msg.name),
-            "delete_process": lambda: self.delete_process(msg.name),
-            "start_group": lambda: self.start_group(msg.group),
-            "stop_group": lambda: self.stop_group(msg.group),
-            "set_interval": lambda: self.set_interval(msg.exec_command),
-            "set_persistence": lambda: self.set_persistence(msg.exec_command),
-        }
-
         if action == "create_process":
             self.create_process(
                 msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group,
@@ -523,8 +523,9 @@ class Agent:
                 cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
                 isolated=msg.isolated,
             )
-        elif action in _dispatch:
-            _dispatch[action]()
+        elif action in self._CMD_DISPATCH:
+            method_name, attr = self._CMD_DISPATCH[action]
+            getattr(self, method_name)(getattr(msg, attr))
         else:
             logging.warning("Unknown action: %s", action)
 
@@ -1077,21 +1078,37 @@ class Agent:
             self._zero_proc_metrics(msg_proc)
             return
 
-        # All metric reads can fail if the process exits mid-collection.
-        # Collect what we can and zero the rest.
+        # Each metric can fail independently if the process exits mid-collection.
+        # Granular try/except preserves already-collected values.
+        _exc = (psutil.Error, OSError, ValueError)
+
         try:
             msg_proc.cpu = float(p.cpu_percent(interval=None)) / 100.0
+        except _exc:
+            msg_proc.cpu = 0.0
+
+        try:
             mi = p.memory_info()
             msg_proc.mem_rss = int(mi.rss // 1024)
             msg_proc.mem_vms = int(mi.vms // 1024)
+        except _exc:
+            msg_proc.mem_rss = 0
+            msg_proc.mem_vms = 0
+
+        try:
             msg_proc.priority = int(self._htop_priority(pid))
+        except _exc:
+            msg_proc.priority = 0
+
+        try:
             msg_proc.ppid = int(p.ppid())
+        except _exc:
+            msg_proc.ppid = -1
+
+        try:
             msg_proc.runtime = int(time.time() - p.create_time())
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            # Process disappeared — zero everything not yet set
-            self._zero_proc_metrics(msg_proc)
-        except (psutil.Error, OSError, ValueError) as e:
-            logging.debug("Metrics collection partial failure for pid %d: %s", pid, e)
+        except _exc:
+            msg_proc.runtime = 0
 
     def publish_host_procs(self) -> None:
         """Publish process-level telemetry for all managed processes."""

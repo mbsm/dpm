@@ -856,25 +856,19 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            exec_command = getattr(src_proc, "exec_command", "")
-            group = getattr(src_proc, "group", "")
-            auto_restart = bool(getattr(src_proc, "auto_restart", False))
-            realtime = bool(getattr(src_proc, "realtime", False))
-            isolated = bool(getattr(src_proc, "isolated", False))
-            work_dir = getattr(src_proc, "work_dir", "") or ""
-            cpuset = getattr(src_proc, "cpuset", "") or ""
-            cpu_limit = float(getattr(src_proc, "cpu_limit", 0.0) or 0.0)
-            mem_limit = int(getattr(src_proc, "mem_limit", 0) or 0)
+            from dpm.spec_io import extract_proc_spec
+            spec = extract_proc_spec(src_proc)
             was_running = getattr(src_proc, "state", "") == "R"
 
             if was_running:
                 self.supervisor.stop_proc(proc_name, src_host)
 
             self.supervisor.create_proc(
-                proc_name, exec_command, group, dst_host,
-                auto_restart, realtime, isolated=isolated,
-                work_dir=work_dir, cpuset=cpuset,
-                cpu_limit=cpu_limit, mem_limit=mem_limit,
+                proc_name, spec["exec_command"], spec["group"], dst_host,
+                spec["auto_restart"], spec["realtime"],
+                isolated=spec["isolated"], work_dir=spec["work_dir"],
+                cpuset=spec["cpuset"], cpu_limit=spec["cpu_limit"],
+                mem_limit=spec["mem_limit"],
             )
 
             if was_running:

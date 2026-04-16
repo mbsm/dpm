@@ -7,9 +7,27 @@ Shared module used by both GUI and CLI (keeps GUI independent of dpm.cli.*).
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+
+
+def extract_proc_spec(proc) -> Dict[str, Any]:
+    """Extract process spec fields from a proc_info_t message or similar object.
+
+    Shared by CLI move, GUI move, and save operations to avoid field duplication.
+    """
+    return {
+        "exec_command": getattr(proc, "exec_command", "") or "",
+        "group": getattr(proc, "group", "") or "",
+        "auto_restart": bool(getattr(proc, "auto_restart", False)),
+        "realtime": bool(getattr(proc, "realtime", False)),
+        "isolated": bool(getattr(proc, "isolated", False)),
+        "work_dir": getattr(proc, "work_dir", "") or "",
+        "cpuset": getattr(proc, "cpuset", "") or "",
+        "cpu_limit": float(getattr(proc, "cpu_limit", 0.0) or 0.0),
+        "mem_limit": int(getattr(proc, "mem_limit", 0) or 0),
+    }
 
 
 def _merge_and_write(path: str, new_items: List[Dict[str, Any]], append: bool) -> None:
@@ -125,30 +143,15 @@ def save_all_process_specs(
         name = getattr(p, "name", "") or ""
         host = getattr(p, "hostname", "") or ""
         exec_command = getattr(p, "exec_command", "") or ""
-        group = getattr(p, "group", "") or ""
-        auto_restart = bool(getattr(p, "auto_restart", False))
-        realtime = bool(getattr(p, "realtime", False))
-        isolated = bool(getattr(p, "isolated", False))
 
         if not (name and host and exec_command):
             skipped += 1
             continue
 
-        specs.append(
-            {
-                "name": name,
-                "host": host,
-                "exec_command": exec_command,
-                "group": group,
-                "auto_restart": auto_restart,
-                "realtime": realtime,
-                "isolated": isolated,
-                "work_dir": getattr(p, "work_dir", "") or "",
-                "cpuset": getattr(p, "cpuset", "") or "",
-                "cpu_limit": float(getattr(p, "cpu_limit", 0.0) or 0.0),
-                "mem_limit": int(getattr(p, "mem_limit", 0) or 0),
-            }
-        )
+        spec = extract_proc_spec(p)
+        spec["name"] = name
+        spec["host"] = host
+        specs.append(spec)
 
     if not specs:
         return 0, skipped
