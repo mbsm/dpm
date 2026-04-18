@@ -12,9 +12,9 @@ from PyQt5.QtWidgets import (
 
 
 class ProcessDialog(QDialog):
-    def __init__(self, supervisor, proc=None):
+    def __init__(self, client, proc=None):
         super().__init__()
-        self.supervisor = supervisor
+        self.client = client
         self.proc = proc
         self.init_ui()
 
@@ -122,9 +122,9 @@ class ProcessDialog(QDialog):
                 old_host = getattr(self.proc, "hostname", host)
                 old_name = getattr(self.proc, "name", None)
                 if old_name:
-                    self.supervisor.stop_proc(old_name, old_host)
-                    self.supervisor.del_proc(old_name, old_host)
-            self.supervisor.create_proc(
+                    self.client.stop_proc(old_name, old_host)
+                    self.client.del_proc(old_name, old_host)
+            self.client.create_proc(
                 name, proc_command, group, host, auto_restart, realtime,
                 work_dir=work_dir, cpuset=cpuset,
                 cpu_limit=cpu_limit, mem_limit=mem_limit,

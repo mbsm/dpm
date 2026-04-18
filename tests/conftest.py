@@ -25,10 +25,10 @@ def agent(config_path):
 
 
 @pytest.fixture
-def supervisor(config_path):
-    """Supervisor with mocked LCM — safe for unit tests (no network)."""
-    with patch("dpm.supervisor.supervisor.lcm.LCM") as MockLCM:
+def client(config_path):
+    """Client with mocked LCM — safe for unit tests (no network)."""
+    with patch("dpm.client.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        from dpm.supervisor.supervisor import Supervisor
-        s = Supervisor(config_path)
+        from dpm.client import Client
+        s = Client(config_path)
         yield s

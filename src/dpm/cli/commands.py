@@ -67,13 +67,13 @@ def _proc_rows(procs, host_filter=None):
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_status(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
+def cmd_status(client, args) -> int:
+    if not wait_for_telemetry(client):
         return _no_agents()
 
     host_filter = args.host
 
-    hosts = supervisor.hosts
+    hosts = client.hosts
     if host_filter and host_filter not in hosts:
         available = ", ".join(sorted(hosts.keys()))
         print(f"Host '{host_filter}' not found. Available: {available}", file=sys.stderr)
@@ -87,7 +87,7 @@ def cmd_status(supervisor, args) -> int:
         ))
         print()
 
-    p_rows = _proc_rows(supervisor.procs, host_filter)
+    p_rows = _proc_rows(client.procs, host_filter)
     if p_rows:
         print(format_table(
             ["Process@Host", "Group", "State", "PID", "CPU%", "Mem(MB)", "Runtime", "Auto"],
@@ -99,11 +99,11 @@ def cmd_status(supervisor, args) -> int:
     return 0
 
 
-def cmd_hosts(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
+def cmd_hosts(client, args) -> int:
+    if not wait_for_telemetry(client):
         return _no_agents()
 
-    h_rows = _host_rows(supervisor.hosts)
+    h_rows = _host_rows(client.hosts)
     if h_rows:
         print(format_table(
             ["Host", "IP", "CPUs", "CPU%", "Mem%", "Interval", "Persist", "Status"],
@@ -114,29 +114,29 @@ def cmd_hosts(supervisor, args) -> int:
     return 0
 
 
-def _require_proc(supervisor, args):
+def _require_proc(client, args):
     """Common preamble: wait for telemetry, validate process exists.
 
     Returns (name, host) on success, or None and prints an error.
     """
-    if not wait_for_telemetry(supervisor):
+    if not wait_for_telemetry(client):
         _no_agents()
         return None
     name, host = args.name, args.host
-    if (host, name) not in supervisor.procs:
+    if (host, name) not in client.procs:
         print(f"Process '{name}@{host}' not found.", file=sys.stderr)
         return None
     return name, host
 
 
-def cmd_start(supervisor, args) -> int:
-    result = _require_proc(supervisor, args)
+def cmd_start(client, args) -> int:
+    result = _require_proc(client, args)
     if result is None:
         return 1
     name, host = result
 
-    supervisor.start_proc(name, host)
-    confirmed = wait_for_state(supervisor, name, host, target="R")
+    client.start_proc(name, host)
+    confirmed = wait_for_state(client, name, host, target="R")
     if confirmed:
         print(f"Started {name}@{host}")
     else:
@@ -144,14 +144,14 @@ def cmd_start(supervisor, args) -> int:
     return 0
 
 
-def cmd_stop(supervisor, args) -> int:
-    result = _require_proc(supervisor, args)
+def cmd_stop(client, args) -> int:
+    result = _require_proc(client, args)
     if result is None:
         return 1
     name, host = result
 
-    supervisor.stop_proc(name, host)
-    confirmed = wait_for_state(supervisor, name, host, not_target="R")
+    client.stop_proc(name, host)
+    confirmed = wait_for_state(client, name, host, not_target="R")
     if confirmed:
         print(f"Stopped {name}@{host}")
     else:
@@ -159,16 +159,16 @@ def cmd_stop(supervisor, args) -> int:
     return 0
 
 
-def cmd_restart(supervisor, args) -> int:
-    result = _require_proc(supervisor, args)
+def cmd_restart(client, args) -> int:
+    result = _require_proc(client, args)
     if result is None:
         return 1
     name, host = result
 
-    supervisor.stop_proc(name, host)
-    wait_for_state(supervisor, name, host, not_target="R", timeout=5.0)
-    supervisor.start_proc(name, host)
-    confirmed = wait_for_state(supervisor, name, host, target="R")
+    client.stop_proc(name, host)
+    wait_for_state(client, name, host, not_target="R", timeout=5.0)
+    client.start_proc(name, host)
+    confirmed = wait_for_state(client, name, host, target="R")
     if confirmed:
         print(f"Restarted {name}@{host}")
     else:
@@ -176,17 +176,17 @@ def cmd_restart(supervisor, args) -> int:
     return 0
 
 
-def cmd_create(supervisor, args) -> int:
+def cmd_create(client, args) -> int:
     name, host = args.name, args.host
-    supervisor.create_proc(
+    client.create_proc(
         name, args.cmd, args.group, host, args.auto_restart, args.realtime,
         work_dir=args.work_dir, cpuset=args.cpuset,
         cpu_limit=args.cpu_limit, mem_limit=args.mem_limit,
         isolated=args.isolated,
     )
 
-    if wait_for_telemetry(supervisor):
-        confirmed = wait_for_state(supervisor, name, host, target="T", timeout=3.0)
+    if wait_for_telemetry(client):
+        confirmed = wait_for_state(client, name, host, target="T", timeout=3.0)
         if confirmed:
             print(f"Created {name}@{host}")
             return 0
@@ -195,16 +195,16 @@ def cmd_create(supervisor, args) -> int:
     return 0
 
 
-def cmd_delete(supervisor, args) -> int:
-    result = _require_proc(supervisor, args)
+def cmd_delete(client, args) -> int:
+    result = _require_proc(client, args)
     if result is None:
         return 1
     name, host = result
 
-    supervisor.stop_proc(name, host)
-    wait_for_state(supervisor, name, host, not_target="R", timeout=3.0)
-    supervisor.del_proc(name, host)
-    confirmed = wait_for_proc_gone(supervisor, name, host)
+    client.stop_proc(name, host)
+    wait_for_state(client, name, host, not_target="R", timeout=3.0)
+    client.del_proc(name, host)
+    confirmed = wait_for_proc_gone(client, name, host)
     if confirmed:
         print(f"Deleted {name}@{host}")
     else:
@@ -212,23 +212,23 @@ def cmd_delete(supervisor, args) -> int:
     return 0
 
 
-def cmd_start_group(supervisor, args) -> int:
-    supervisor.start_group(args.group, args.host)
+def cmd_start_group(client, args) -> int:
+    client.start_group(args.group, args.host)
     print(f"Start-group sent for '{args.group}' on {args.host}")
     return 0
 
 
-def cmd_stop_group(supervisor, args) -> int:
-    supervisor.stop_group(args.group, args.host)
+def cmd_stop_group(client, args) -> int:
+    client.stop_group(args.group, args.host)
     print(f"Stop-group sent for '{args.group}' on {args.host}")
     return 0
 
 
-def cmd_load(supervisor, args) -> int:
+def cmd_load(client, args) -> int:
     from dpm.spec_io import load_and_create
 
     try:
-        created, errors = load_and_create(args.path, supervisor)
+        created, errors = load_and_create(args.path, client)
     except FileNotFoundError:
         print(f"File not found: {args.path}", file=sys.stderr)
         return 1
@@ -247,14 +247,14 @@ def cmd_load(supervisor, args) -> int:
     return 1 if errors else 0
 
 
-def cmd_save(supervisor, args) -> int:
+def cmd_save(client, args) -> int:
     from dpm.spec_io import save_all_process_specs
 
-    if not wait_for_telemetry(supervisor):
+    if not wait_for_telemetry(client):
         return _no_agents()
 
     try:
-        written, skipped = save_all_process_specs(args.path, supervisor, append=args.append)
+        written, skipped = save_all_process_specs(args.path, client, append=args.append)
     except Exception as e:
         print(f"Failed to save: {e}", file=sys.stderr)
         return 1
@@ -264,54 +264,54 @@ def cmd_save(supervisor, args) -> int:
     return 0
 
 
-def cmd_start_all(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
+def cmd_start_all(client, args) -> int:
+    if not wait_for_telemetry(client):
         return _no_agents()
 
-    procs = supervisor.procs
+    procs = client.procs
     count = 0
     for (host, name) in sorted(procs.keys()):
-        supervisor.start_proc(name, host)
+        client.start_proc(name, host)
         count += 1
 
     print(f"Start sent to {count} processes")
     return 0
 
 
-def cmd_stop_all(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
+def cmd_stop_all(client, args) -> int:
+    if not wait_for_telemetry(client):
         return _no_agents()
 
-    procs = supervisor.procs
+    procs = client.procs
     count = 0
     for (host, name) in sorted(procs.keys()):
-        supervisor.stop_proc(name, host)
+        client.stop_proc(name, host)
         count += 1
 
     print(f"Stop sent to {count} processes")
     return 0
 
 
-def cmd_set_persistence(supervisor, args) -> int:
+def cmd_set_persistence(client, args) -> int:
     enabled = args.mode == "on"
     host = args.host
 
     if host:
-        if not wait_for_telemetry(supervisor):
+        if not wait_for_telemetry(client):
             return _no_agents()
-        if host not in supervisor.hosts:
-            available = ", ".join(sorted(supervisor.hosts.keys()))
+        if host not in client.hosts:
+            available = ", ".join(sorted(client.hosts.keys()))
             print(f"Host '{host}' not responding. Available: {available}", file=sys.stderr)
             return 1
-        supervisor.set_persistence(host, enabled)
+        client.set_persistence(host, enabled)
         print(f"Persistence {'enabled' if enabled else 'disabled'} on {host}")
     else:
-        supervisor.set_persistence("", enabled)
+        client.set_persistence("", enabled)
         print(f"Persistence {'enabled' if enabled else 'disabled'} on all agents")
     return 0
 
 
-def cmd_set_interval(supervisor, args) -> int:
+def cmd_set_interval(client, args) -> int:
     seconds = args.seconds
     if seconds < 0.05:
         print("Interval must be >= 0.05 seconds.", file=sys.stderr)
@@ -320,23 +320,23 @@ def cmd_set_interval(supervisor, args) -> int:
     host = args.host
     if host:
         # Targeted: send to specific host
-        if not wait_for_telemetry(supervisor):
+        if not wait_for_telemetry(client):
             return _no_agents()
-        if host not in supervisor.hosts:
-            available = ", ".join(sorted(supervisor.hosts.keys()))
+        if host not in client.hosts:
+            available = ", ".join(sorted(client.hosts.keys()))
             print(f"Host '{host}' not responding. Available: {available}", file=sys.stderr)
             return 1
-        supervisor.set_interval(host, seconds)
+        client.set_interval(host, seconds)
         print(f"Set interval to {seconds}s on {host}")
     else:
         # Broadcast: send with empty hostname (all agents)
-        supervisor.set_interval("", seconds)
+        client.set_interval("", seconds)
         print(f"Set interval to {seconds}s on all agents")
     return 0
 
 
-def cmd_move(supervisor, args) -> int:
-    if not wait_for_telemetry(supervisor):
+def cmd_move(client, args) -> int:
+    if not wait_for_telemetry(client):
         return _no_agents()
 
     src_name, src_host = args.src_name, args.src_host
@@ -344,20 +344,20 @@ def cmd_move(supervisor, args) -> int:
 
     # Validate source exists
     src_key = (src_host, src_name)
-    src_proc = supervisor.procs.get(src_key)
+    src_proc = client.procs.get(src_key)
     if src_proc is None:
         print(f"Process '{src_name}@{src_host}' not found.", file=sys.stderr)
         return 1
 
     # Validate destination host is reachable
-    if dst_host not in supervisor.hosts:
-        available = ", ".join(sorted(supervisor.hosts.keys()))
+    if dst_host not in client.hosts:
+        available = ", ".join(sorted(client.hosts.keys()))
         print(f"Destination host '{dst_host}' not responding. Available: {available}",
               file=sys.stderr)
         return 1
 
     # Check if destination already has a process with that name
-    if (dst_host, dst_name) in supervisor.procs:
+    if (dst_host, dst_name) in client.procs:
         print(f"Process '{dst_name}@{dst_host}' already exists. Delete it first or use a different name.",
               file=sys.stderr)
         return 1
@@ -372,71 +372,71 @@ def cmd_move(supervisor, args) -> int:
     # Step 1: Stop on source if running
     if was_running:
         print(f"Stopping {src_name}@{src_host}...")
-        supervisor.stop_proc(src_name, src_host)
-        if not wait_for_state(supervisor, src_name, src_host, not_target="R", timeout=5.0):
+        client.stop_proc(src_name, src_host)
+        if not wait_for_state(client, src_name, src_host, not_target="R", timeout=5.0):
             print(f"Failed to stop {src_name}@{src_host}. Move aborted.", file=sys.stderr)
             return 1
 
     # Step 2: Create on destination
     print(f"Creating {dst_name}@{dst_host}...")
-    supervisor.create_proc(dst_name, spec["exec_command"], spec["group"], dst_host,
+    client.create_proc(dst_name, spec["exec_command"], spec["group"], dst_host,
                            spec["auto_restart"], spec["realtime"],
                            isolated=spec["isolated"], work_dir=spec["work_dir"],
                            cpuset=spec["cpuset"], cpu_limit=spec["cpu_limit"],
                            mem_limit=spec["mem_limit"])
-    wait_for_state(supervisor, dst_name, dst_host, target="T", timeout=5.0)
+    wait_for_state(client, dst_name, dst_host, target="T", timeout=5.0)
 
     # Verify it appeared
-    if (dst_host, dst_name) not in supervisor.procs:
+    if (dst_host, dst_name) not in client.procs:
         # Rollback: restart on source if it was running
         print(f"Failed to create on {dst_host}. Rolling back...", file=sys.stderr)
         if was_running:
-            supervisor.start_proc(src_name, src_host)
+            client.start_proc(src_name, src_host)
         return 1
 
     # Step 3: Start on destination if source was running
     if was_running:
         print(f"Starting {dst_name}@{dst_host}...")
-        supervisor.start_proc(dst_name, dst_host)
-        if not wait_for_state(supervisor, dst_name, dst_host, target="R"):
+        client.start_proc(dst_name, dst_host)
+        if not wait_for_state(client, dst_name, dst_host, target="R"):
             print(f"Warning: start on {dst_host} not confirmed, but definition was created.", file=sys.stderr)
 
     # Step 4: Delete from source
     print(f"Removing {src_name}@{src_host}...")
-    supervisor.del_proc(src_name, src_host)
+    client.del_proc(src_name, src_host)
 
     print(f"Moved {label}")
     return 0
 
 
-def cmd_launch(supervisor, args) -> int:
+def cmd_launch(client, args) -> int:
     from dpm.cli.launch import run_launch
 
-    if not wait_for_telemetry(supervisor):
+    if not wait_for_telemetry(client):
         return _no_agents()
 
-    return run_launch(supervisor, args.path, reverse=False)
+    return run_launch(client, args.path, reverse=False)
 
 
-def cmd_shutdown(supervisor, args) -> int:
+def cmd_shutdown(client, args) -> int:
     from dpm.cli.launch import run_launch
 
-    if not wait_for_telemetry(supervisor):
+    if not wait_for_telemetry(client):
         return _no_agents()
 
-    return run_launch(supervisor, args.path, reverse=True)
+    return run_launch(client, args.path, reverse=True)
 
 
-def cmd_logs(supervisor, args) -> int:
+def cmd_logs(client, args) -> int:
     name = args.name
     host = args.host
 
-    if not wait_for_telemetry(supervisor):
+    if not wait_for_telemetry(client):
         return _no_agents()
 
     # Resolve host if not provided
     if host is None:
-        matches = [(h, n) for (h, n) in supervisor.procs if n == name]
+        matches = [(h, n) for (h, n) in client.procs if n == name]
         if len(matches) == 0:
             print(f"Process '{name}' not found. Use 'dpm status' to see available processes.",
                   file=sys.stderr)
@@ -455,7 +455,7 @@ def cmd_logs(supervisor, args) -> int:
     idle_count = 0
     try:
         while True:
-            gen, text, reset, cur_len = supervisor.get_proc_output_delta(
+            gen, text, reset, cur_len = client.get_proc_output_delta(
                 name, last_gen, last_len
             )
             if text:

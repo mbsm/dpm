@@ -13,7 +13,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    from dpm.supervisor.supervisor import Supervisor
+    from dpm.client import Client
     from dpm.gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
@@ -21,8 +21,8 @@ def main() -> None:
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
 
     try:
-        supervisor = Supervisor(config_path)
-        supervisor.start()
+        client = Client(config_path)
+        client.start()
     except Exception as e:
         QMessageBox.critical(
             None,
@@ -31,9 +31,9 @@ def main() -> None:
         )
         sys.exit(1)
 
-    window = MainWindow(supervisor)
+    window = MainWindow(client)
     window.show()
-    sys.exit(app.exec_())  # closeEvent handles supervisor.stop()
+    sys.exit(app.exec_())  # closeEvent handles client.stop()
 
 
 if __name__ == "__main__":

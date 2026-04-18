@@ -1,5 +1,5 @@
 """
-Save / load process specs as YAML and create processes via Supervisor.
+Save / load process specs as YAML and create processes via Client.
 
 Shared module used by both GUI and CLI (keeps GUI independent of dpm.cli.*).
 """
@@ -92,7 +92,7 @@ def load_process_specs(path: str) -> List[Dict[str, Any]]:
 
 
 def load_and_create(
-    path: str, supervisor
+    path: str, client
 ) -> Tuple[List[str], List[Tuple[Dict[str, Any], str]]]:
     created: List[str] = []
     errors: List[Tuple[Dict[str, Any], str]] = []
@@ -109,7 +109,7 @@ def load_and_create(
             realtime = bool(spec.get("realtime", False))
             isolated = bool(spec.get("isolated", False))
 
-            supervisor.create_proc(
+            client.create_proc(
                 name, exec_command, group, host, auto_restart, realtime,
                 work_dir=spec.get("work_dir", ""),
                 cpuset=str(spec.get("cpuset", "")),
@@ -125,14 +125,14 @@ def load_and_create(
 
 
 def save_all_process_specs(
-    path: str, supervisor, append: bool = False
+    path: str, client, append: bool = False
 ) -> Tuple[int, int]:
     """
-    Save all processes known to supervisor into a YAML list.
+    Save all processes known to client into a YAML list.
     Returns (written, skipped).
     """
     try:
-        procs = supervisor.procs  # snapshot dict
+        procs = client.procs  # snapshot dict
     except AttributeError:
         procs = {}
 

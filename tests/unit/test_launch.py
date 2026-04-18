@@ -204,8 +204,8 @@ def test_create_processes_error_counted():
 
 # --- _start_group / _stop_group ---
 
-def _mock_supervisor_with_procs(procs_dict):
-    """Create a mock supervisor whose .procs property returns procs_dict."""
+def _mock_client_with_procs(procs_dict):
+    """Create a mock client whose .procs property returns procs_dict."""
     sup = MagicMock()
     type(sup).procs = PropertyMock(return_value=procs_dict)
     return sup
@@ -215,7 +215,7 @@ def test_start_group():
     from dpm.cli.launch import _start_group
     proc = MagicMock()
     proc.group = "core"
-    sup = _mock_supervisor_with_procs({("h1", "svc"): proc})
+    sup = _mock_client_with_procs({("h1", "svc"): proc})
     result = _start_group(sup, "core")
     assert result == [("h1", "svc")]
     sup.start_group.assert_called_once_with("core", "h1")
@@ -225,7 +225,7 @@ def test_stop_group():
     from dpm.cli.launch import _stop_group
     proc = MagicMock()
     proc.group = "core"
-    sup = _mock_supervisor_with_procs({("h1", "svc"): proc})
+    sup = _mock_client_with_procs({("h1", "svc"): proc})
     result = _stop_group(sup, "core")
     assert result == [("h1", "svc")]
     sup.stop_group.assert_called_once_with("core", "h1")
@@ -233,7 +233,7 @@ def test_stop_group():
 
 def test_start_group_empty():
     from dpm.cli.launch import _start_group
-    sup = _mock_supervisor_with_procs({})
+    sup = _mock_client_with_procs({})
     result = _start_group(sup, "nonexistent")
     assert result == []
     sup.start_group.assert_not_called()
@@ -245,7 +245,7 @@ def test_wait_group_running_success():
     from dpm.cli.launch import _wait_group_running
     proc = MagicMock()
     proc.group = "core"
-    sup = _mock_supervisor_with_procs({("h1", "svc"): proc})
+    sup = _mock_client_with_procs({("h1", "svc"): proc})
     with patch("dpm.cli.launch.wait_for_state", return_value=True):
         ok, failed = _wait_group_running(sup, "core", timeout=5)
     assert ok is True
@@ -256,7 +256,7 @@ def test_wait_group_running_timeout():
     from dpm.cli.launch import _wait_group_running
     proc = MagicMock()
     proc.group = "core"
-    sup = _mock_supervisor_with_procs({("h1", "svc"): proc})
+    sup = _mock_client_with_procs({("h1", "svc"): proc})
     with patch("dpm.cli.launch.wait_for_state", return_value=False):
         ok, failed = _wait_group_running(sup, "core", timeout=5)
     assert ok is False
@@ -267,7 +267,7 @@ def test_wait_group_stopped_success():
     from dpm.cli.launch import _wait_group_stopped
     proc = MagicMock()
     proc.group = "core"
-    sup = _mock_supervisor_with_procs({("h1", "svc"): proc})
+    sup = _mock_client_with_procs({("h1", "svc"): proc})
     with patch("dpm.cli.launch.wait_for_state", return_value=True):
         ok, failed = _wait_group_stopped(sup, "core", timeout=5)
     assert ok is True

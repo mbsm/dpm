@@ -59,7 +59,7 @@ def test_start_without_work_dir_no_cwd(agent):
         assert "cwd" not in kwargs
 
 
-def test_supervisor_forwards_work_dir(supervisor):
-    supervisor.create_proc("test", "echo hi", "grp", "host1",
+def test_client_forwards_work_dir(client):
+    client.create_proc("test", "echo hi", "grp", "host1",
                            work_dir="/opt/robot")
-    assert supervisor.lc_pub.publish.called
+    assert client.lc_pub.publish.called

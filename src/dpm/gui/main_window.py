@@ -1,4 +1,4 @@
-"""Main GUI window for the DPM supervisor."""
+"""Main GUI window for the DPM client."""
 
 import logging
 import os
@@ -305,9 +305,9 @@ class MainWindow(QMainWindow):
     _launch_text_changed = pyqtSignal(str)
     _launch_finished = pyqtSignal(bool, str)  # (is_error, result_text)
 
-    def __init__(self, supervisor, *args, **kwargs):
+    def __init__(self, client, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.supervisor = supervisor
+        self.client = client
         # Keep modeless output windows alive (one per proc)
         self.output_windows = {}
 
@@ -504,7 +504,7 @@ class MainWindow(QMainWindow):
         # initial population
         self.load_hosts()
         self.refresh_processes_in_place()
-        self.cluster_panel.update_stats(self.supervisor.hosts, self.supervisor.procs)
+        self.cluster_panel.update_stats(self.client.hosts, self.client.procs)
 
         # widen window to show all columns
         self._ensure_min_width()
@@ -524,7 +524,7 @@ class MainWindow(QMainWindow):
             except RuntimeError:
                 pass
         self.output_windows.clear()
-        self.supervisor.stop()
+        self.client.stop()
         super().closeEvent(event)
 
     def _ensure_min_width(self):
@@ -563,7 +563,7 @@ class MainWindow(QMainWindow):
             return
         try:
             written, skipped = save_all_process_specs(
-                fname, self.supervisor, append=False
+                fname, self.client, append=False
             )
             QMessageBox.information(
                 self, "Success", f"Saved {written} specs, skipped {skipped}."
@@ -579,7 +579,7 @@ class MainWindow(QMainWindow):
         if not fname:
             return
         try:
-            created, errors = load_and_create(fname, self.supervisor)
+            created, errors = load_and_create(fname, self.client)
 
             summary = f"File: {fname}\nCreated: {len(created)}\nErrors: {len(errors)}"
 
@@ -624,8 +624,8 @@ class MainWindow(QMainWindow):
         # Update or create cards without clearing to avoid flicker
         now = time.time()
         seen_hosts = set()
-        all_procs = self.supervisor.procs  # single snapshot for the whole loop
-        for host, info in self.supervisor.hosts.items():
+        all_procs = self.client.procs  # single snapshot for the whole loop
+        for host, info in self.client.hosts.items():
             ts_us = getattr(info, "timestamp", 0) or 0
             try:
                 age = now - (float(ts_us) * 1e-6)
@@ -741,9 +741,9 @@ class MainWindow(QMainWindow):
             if isinstance(d, dict) and d.get("type") == "proc":
                 sel_proc_name = d.get("name")
 
-        # Build group -> procs mapping from supervisor snapshot
+        # Build group -> procs mapping from client snapshot
         groups = {}
-        for p in self.supervisor.procs.values():
+        for p in self.client.procs.values():
             groups.setdefault(getattr(p, "group", None) or "(ungrouped)", []).append(p)
 
         seen_groups = set()
@@ -897,7 +897,7 @@ class MainWindow(QMainWindow):
         # refresh
         self.load_hosts()
         self.refresh_processes_in_place()
-        self.cluster_panel.update_stats(self.supervisor.hosts, self.supervisor.procs)
+        self.cluster_panel.update_stats(self.client.hosts, self.client.procs)
 
         # restore host selection
         if sel_host:
@@ -928,9 +928,9 @@ class MainWindow(QMainWindow):
         # Fetch full current buffer for this proc without copying whole dicts
         initial_text = ""
         initial_gen = 0
-        if hasattr(self.supervisor, "get_proc_output_delta"):
+        if hasattr(self.client, "get_proc_output_delta"):
             initial_gen, initial_text, _reset, _cur_len = (
-                self.supervisor.get_proc_output_delta(
+                self.client.get_proc_output_delta(
                     proc_name, last_gen=-1, last_len=0
                 )
             )
@@ -939,7 +939,7 @@ class MainWindow(QMainWindow):
             proc_name,
             initial_text=initial_text,
             initial_gen=initial_gen,
-            supervisor=self.supervisor,
+            client=self.client,
             parent=self,
         )
         self.output_windows[proc_name] = dlg
@@ -956,7 +956,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
         try:
-            self.supervisor.start_proc(proc_name, host)
+            self.client.start_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
@@ -972,7 +972,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Warning", "No host selected.")
             return
         try:
-            self.supervisor.stop_proc(proc_name, host)
+            self.client.stop_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(
@@ -985,11 +985,11 @@ class MainWindow(QMainWindow):
             return
         # Find the proc object; procs dict is keyed by (hostname, name)
         proc = None
-        for p in self.supervisor.procs.values():
+        for p in self.client.procs.values():
             if p.name == proc_name and (not host_name or getattr(p, "hostname", "") == host_name):
                 proc = p
                 break
-        dlg = ProcessDialog(self.supervisor, proc)
+        dlg = ProcessDialog(self.client, proc)
         if dlg.exec_():
             self.refresh_processes_in_place()
 
@@ -1007,7 +1007,7 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            self.supervisor.del_proc(proc_name, host)
+            self.client.del_proc(proc_name, host)
             self.refresh_processes_in_place()
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to delete process: {e}")
@@ -1022,7 +1022,7 @@ class MainWindow(QMainWindow):
             return
 
         # Offer available hosts (excluding the current one)
-        available = sorted(h for h in self.supervisor.hosts if h != src_host)
+        available = sorted(h for h in self.client.hosts if h != src_host)
         if not available:
             QMessageBox.information(self, "Move", "No other hosts available.")
             return
@@ -1037,7 +1037,7 @@ class MainWindow(QMainWindow):
 
         # Find the source proc to copy its spec
         src_proc = None
-        for p in self.supervisor.procs.values():
+        for p in self.client.procs.values():
             if p.name == proc_name and getattr(p, "hostname", "") == src_host:
                 src_proc = p
                 break
@@ -1051,9 +1051,9 @@ class MainWindow(QMainWindow):
             was_running = getattr(src_proc, "state", "") == "R"
 
             if was_running:
-                self.supervisor.stop_proc(proc_name, src_host)
+                self.client.stop_proc(proc_name, src_host)
 
-            self.supervisor.create_proc(
+            self.client.create_proc(
                 proc_name, spec["exec_command"], spec["group"], dst_host,
                 spec["auto_restart"], spec["realtime"],
                 isolated=spec["isolated"], work_dir=spec["work_dir"],
@@ -1062,9 +1062,9 @@ class MainWindow(QMainWindow):
             )
 
             if was_running:
-                self.supervisor.start_proc(proc_name, dst_host)
+                self.client.start_proc(proc_name, dst_host)
 
-            self.supervisor.del_proc(proc_name, src_host)
+            self.client.del_proc(proc_name, src_host)
             self.refresh_processes_in_place()
             QMessageBox.information(
                 self, "Move",
@@ -1074,7 +1074,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Move failed: {e}")
 
     def new_process(self):
-        dlg = ProcessDialog(self.supervisor, None)  # creation mode
+        dlg = ProcessDialog(self.client, None)  # creation mode
         if dlg.exec_():
             self.refresh_processes_in_place()
 
@@ -1082,7 +1082,7 @@ class MainWindow(QMainWindow):
         self._delete_proc_direct(self._selected_proc(), self._selected_host())
 
     def _change_lcm_url(self):
-        current = getattr(self.supervisor, "lc_url", "")
+        current = getattr(self.client, "lc_url", "")
         new_url, ok = QInputDialog.getText(
             self,
             "Change LCM URL",
@@ -1093,7 +1093,7 @@ class MainWindow(QMainWindow):
             return
         new_url = new_url.strip()
         try:
-            self.supervisor.reconnect_lcm(new_url)
+            self.client.reconnect_lcm(new_url)
             QMessageBox.information(
                 self, "LCM URL", f"LCM URL updated to:\n{new_url}"
             )
@@ -1294,7 +1294,7 @@ class MainWindow(QMainWindow):
         try:
             return [
                 p
-                for p in self.supervisor.procs.values()
+                for p in self.client.procs.values()
                 if (getattr(p, "group", "") or "(ungrouped)") == group_name
             ]
         except (AttributeError, TypeError):
@@ -1308,7 +1308,7 @@ class MainWindow(QMainWindow):
         hosts = {getattr(p, "hostname", "") or "" for p in procs}
         for host in hosts:
             if host:
-                self.supervisor.start_group(group_name, host)
+                self.client.start_group(group_name, host)
         self.refresh_processes_in_place()
 
     def _stop_group(self, group_name: str):
@@ -1319,7 +1319,7 @@ class MainWindow(QMainWindow):
         hosts = {getattr(p, "hostname", "") or "" for p in procs}
         for host in hosts:
             if host:
-                self.supervisor.stop_group(group_name, host)
+                self.client.stop_group(group_name, host)
         self.refresh_processes_in_place()
 
     def _view_group_outputs(self, group_name: str):
@@ -1370,7 +1370,7 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
 
         # Persistence toggle
-        info = self.supervisor.hosts.get(host)
+        info = self.client.hosts.get(host)
         persist = bool(getattr(info, "persist", False)) if info else False
 
         act_persist = QAction(
@@ -1388,12 +1388,12 @@ class MainWindow(QMainWindow):
 
     def _toggle_persistence(self, host: str, enable: bool):
         try:
-            self.supervisor.set_persistence(host, enable)
+            self.client.set_persistence(host, enable)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to set persistence: {e}")
 
     def _set_host_interval(self, host: str):
-        info = self.supervisor.hosts.get(host)
+        info = self.client.hosts.get(host)
         current = float(getattr(info, "report_interval", 1.0) or 1.0) if info else 1.0
         val, ok = QInputDialog.getDouble(
             self, "Telemetry Interval",
@@ -1402,7 +1402,7 @@ class MainWindow(QMainWindow):
         )
         if ok:
             try:
-                self.supervisor.set_interval(host, val)
+                self.client.set_interval(host, val)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to set interval: {e}")
 
@@ -1493,7 +1493,7 @@ class MainWindow(QMainWindow):
         try:
             if not reverse and script["processes"]:
                 self._launch_text_changed.emit(f"{mode}: {name}\n\nCreating processes...")
-                errors = _create_processes(self.supervisor, script["processes"])
+                errors = _create_processes(self.client, script["processes"])
                 if errors:
                     self._launch_finished.emit(True, f"{errors} process(es) failed to create.")
                     return
@@ -1514,16 +1514,16 @@ class MainWindow(QMainWindow):
 
                 if reverse:
                     for g in wave:
-                        _stop_group(self.supervisor, g)
+                        _stop_group(self.client, g)
                     for g in wave:
-                        ok, failed = _wait_group_stopped(self.supervisor, g, timeout)
+                        ok, failed = _wait_group_stopped(self.client, g, timeout)
                         if not ok:
                             failed_groups.append((g, failed))
                 else:
                     for g in wave:
-                        _start_group(self.supervisor, g)
+                        _start_group(self.client, g)
                     for g in wave:
-                        ok, failed = _wait_group_running(self.supervisor, g, timeout)
+                        ok, failed = _wait_group_running(self.client, g, timeout)
                         if not ok:
                             dependents = []
                             for later_wave in waves[i + 1:]:

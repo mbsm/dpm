@@ -11,11 +11,11 @@ from PyQt5.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBoxL
 
 class ProcessOutput(QDialog):
     def __init__(
-        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, supervisor=None, parent=None
+        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, client=None, parent=None
     ):
         super().__init__(parent)
         self.proc_name = proc_name
-        self.supervisor = supervisor
+        self.client = client
 
         self.setWindowTitle(f"Output: {proc_name}")
 
@@ -42,25 +42,25 @@ class ProcessOutput(QDialog):
             self._last_len = len(initial_text)
 
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh_from_supervisor)
+        self._timer.timeout.connect(self._refresh_from_client)
         self._timer.start(500)
 
     def _clear_output(self) -> None:
         self.text.clear()
-        if self.supervisor is not None and hasattr(self.supervisor, "clear_proc_output"):
-            self.supervisor.clear_proc_output(self.proc_name)
+        if self.client is not None and hasattr(self.client, "clear_proc_output"):
+            self.client.clear_proc_output(self.proc_name)
         self._last_gen = -1
         self._last_len = 0
 
-    def _refresh_from_supervisor(self) -> None:
-        if self.supervisor is None:
+    def _refresh_from_client(self) -> None:
+        if self.client is None:
             return
 
-        if not hasattr(self.supervisor, "get_proc_output_delta"):
-            # Fallback: avoid crashing if supervisor is older; do nothing.
+        if not hasattr(self.client, "get_proc_output_delta"):
+            # Fallback: avoid crashing if client is older; do nothing.
             return
 
-        gen, delta, reset, cur_len = self.supervisor.get_proc_output_delta(
+        gen, delta, reset, cur_len = self.client.get_proc_output_delta(
             self.proc_name,
             self._last_gen,
             self._last_len,

@@ -231,25 +231,25 @@ def main() -> None:
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
 
     try:
-        from dpm.supervisor.supervisor import Supervisor
-        supervisor = Supervisor(config_path)
-        supervisor.start()
+        from dpm.client import Client
+        client = Client(config_path)
+        client.start()
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
     # Clean shutdown on SIGTERM (e.g. from pipelines)
     def _sigterm(signum, frame):
-        supervisor.stop()
+        client.stop()
         sys.exit(0)
     signal.signal(signal.SIGTERM, _sigterm)
 
     try:
-        rc = DISPATCH[args.command](supervisor, args)
+        rc = DISPATCH[args.command](client, args)
     except KeyboardInterrupt:
         rc = 0
     finally:
-        supervisor.stop()
+        client.stop()
 
     sys.exit(rc)
 

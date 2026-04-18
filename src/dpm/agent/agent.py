@@ -35,7 +35,7 @@ MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
 
 # Maximum bytes buffered per process on the agent side. Prevents unbounded
 # memory growth when a process produces output faster than the publish interval.
-MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches supervisor-side cap)
+MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches client-side cap)
 
 from dpm.agent.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup, _resolve_cgroup_base
 
@@ -502,7 +502,7 @@ class Agent:
             return
 
         # Drop duplicate or reordered UDP commands via monotonic seq.
-        # Accept seq==0 when last>0 as a supervisor-restart signal.
+        # Accept seq==0 when last>0 as a client-restart signal.
         dedup_key = (msg.hostname, msg.action, msg.name)
         with self._last_seq_lock:
             last = self._last_seq.get(dedup_key, -1)

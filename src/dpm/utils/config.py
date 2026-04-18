@@ -1,4 +1,4 @@
-"""Shared configuration loading for DPM agent and supervisor."""
+"""Shared configuration loading for DPM agent and client."""
 
 import os
 from typing import List

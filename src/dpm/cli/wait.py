@@ -3,7 +3,7 @@
 import time
 
 
-def wait_for_telemetry(supervisor, timeout: float = 6.0, settle: float = 2.0, poll: float = 0.1) -> bool:
+def wait_for_telemetry(client, timeout: float = 6.0, settle: float = 2.0, poll: float = 0.1) -> bool:
     """Block until telemetry arrives, then wait for additional hosts to check in.
 
     Waits up to `timeout` seconds for the first host to appear, then waits
@@ -12,7 +12,7 @@ def wait_for_telemetry(supervisor, timeout: float = 6.0, settle: float = 2.0, po
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if supervisor.hosts:
+        if client.hosts:
             # First host seen — wait a bit longer for others to report in
             time.sleep(settle)
             return True
@@ -21,7 +21,7 @@ def wait_for_telemetry(supervisor, timeout: float = 6.0, settle: float = 2.0, po
 
 
 def wait_for_state(
-    supervisor, name: str, host: str,
+    client, name: str, host: str,
     target: str = None,
     not_target: str = None,
     timeout: float = 3.0,
@@ -35,7 +35,7 @@ def wait_for_state(
     """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        procs = supervisor.procs
+        procs = client.procs
         info = procs.get((host, name))
         if info is not None:
             state = getattr(info, "state", "")
@@ -48,14 +48,14 @@ def wait_for_state(
 
 
 def wait_for_proc_gone(
-    supervisor, name: str, host: str,
+    client, name: str, host: str,
     timeout: float = 3.0,
     poll: float = 0.2,
 ) -> bool:
-    """Block until the process disappears from the supervisor's procs dict."""
+    """Block until the process disappears from the client's procs dict."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if (host, name) not in supervisor.procs:
+        if (host, name) not in client.procs:
             return True
         time.sleep(poll)
     return False

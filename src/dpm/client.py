@@ -1,4 +1,4 @@
-"""Supervisor — publishes commands to agents and aggregates telemetry for the UI."""
+"""Client — publishes commands to daemons and aggregates telemetry for the UI."""
 
 import logging
 import os
@@ -37,7 +37,7 @@ class _ProcOutputState:
     gen: int = 0
 
 
-class Supervisor:
+class Client:
     """
     Thread model:
       - One background thread owns lc_sub and calls handle_timeout().
@@ -125,7 +125,7 @@ class Supervisor:
         self.lc_sub.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
 
         logging.info(
-            "Supervisor LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
+            "Client LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
             self.lc_url,
             self.command_channel,
             self.host_info_channel,
@@ -134,9 +134,9 @@ class Supervisor:
         )
 
     def _reconnect_lcm(self, err: Exception) -> None:
-        logging.exception("Supervisor LCM error: %s", err)
+        logging.exception("Client LCM error: %s", err)
         delay = self._lcm_backoff_s
-        logging.warning("Reinitializing Supervisor LCM in %.2fs...", delay)
+        logging.warning("Reinitializing Client LCM in %.2fs...", delay)
         time.sleep(delay)
         self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
 
@@ -144,9 +144,9 @@ class Supervisor:
             try:
                 self._init_lcm()
                 self._lcm_backoff_s = 0.25
-                logging.info("Supervisor LCM reinitialized successfully.")
+                logging.info("Client LCM reinitialized successfully.")
             except (OSError, RuntimeError) as e2:
-                logging.exception("Supervisor LCM reinit failed: %s", e2)
+                logging.exception("Client LCM reinit failed: %s", e2)
 
     # -----------------
     # LCM handlers (background thread)
@@ -434,7 +434,7 @@ class Supervisor:
                 del self._host_last_seen[hostname]
                 for name in self._procs_by_host.pop(hostname, set()):
                     self._procs.pop((hostname, name), None)
-                logging.info("Supervisor: evicted stale host %s", hostname)
+                logging.info("Client: evicted stale host %s", hostname)
 
     def _thread_func(self) -> None:
         evict_counter = 0
@@ -448,7 +448,7 @@ class Supervisor:
                 # Same failure class as the node: lcm_handle_timeout() returned -1
                 self._reconnect_lcm(e)
             except Exception as e:
-                logging.exception("Supervisor LCM handler error: %s", e)
+                logging.exception("Client LCM handler error: %s", e)
                 time.sleep(0.2)
 
             # Run eviction check every ~5 seconds (50 iterations × 100ms timeout)

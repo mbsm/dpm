@@ -1,4 +1,4 @@
-"""Tests for DPM CLI commands with mocked Supervisor."""
+"""Tests for DPM CLI commands with mocked Client."""
 
 import argparse
 import time
@@ -89,14 +89,14 @@ def _make_proc(name="svc", hostname="jet1", state="R", pid=1234):
     )
 
 
-def _inject(supervisor, hosts=None, procs=None):
-    """Populate supervisor internals to simulate telemetry."""
+def _inject(client, hosts=None, procs=None):
+    """Populate client internals to simulate telemetry."""
     if hosts:
         for h in hosts:
-            supervisor._hosts[h.hostname] = h
+            client._hosts[h.hostname] = h
     if procs:
         for p in procs:
-            supervisor._procs[(p.hostname, p.name)] = p
+            client._procs[(p.hostname, p.name)] = p
 
 
 # ---------------------------------------------------------------------------
@@ -104,20 +104,20 @@ def _inject(supervisor, hosts=None, procs=None):
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=False)
-def test_status_no_agents(mock_wait, supervisor, capsys):
+def test_status_no_agents(mock_wait, client, capsys):
     args = argparse.Namespace(command="status", host=None)
-    rc = commands.cmd_status(supervisor, args)
+    rc = commands.cmd_status(client, args)
     assert rc == 2
     assert "No agents" in capsys.readouterr().err
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_status_shows_hosts_and_procs(mock_wait, supervisor, capsys):
-    _inject(supervisor,
+def test_status_shows_hosts_and_procs(mock_wait, client, capsys):
+    _inject(client,
             hosts=[_make_host("jet1")],
             procs=[_make_proc("cam", "jet1")])
     args = argparse.Namespace(command="status", host=None)
-    rc = commands.cmd_status(supervisor, args)
+    rc = commands.cmd_status(client, args)
     assert rc == 0
     out = capsys.readouterr().out
     assert "jet1" in out
@@ -125,12 +125,12 @@ def test_status_shows_hosts_and_procs(mock_wait, supervisor, capsys):
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_status_host_filter(mock_wait, supervisor, capsys):
-    _inject(supervisor,
+def test_status_host_filter(mock_wait, client, capsys):
+    _inject(client,
             hosts=[_make_host("jet1"), _make_host("jet2")],
             procs=[_make_proc("a", "jet1"), _make_proc("b", "jet2")])
     args = argparse.Namespace(command="status", host="jet1")
-    rc = commands.cmd_status(supervisor, args)
+    rc = commands.cmd_status(client, args)
     assert rc == 0
     out = capsys.readouterr().out
     assert "a@jet1" in out
@@ -138,10 +138,10 @@ def test_status_host_filter(mock_wait, supervisor, capsys):
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_status_host_not_found(mock_wait, supervisor, capsys):
-    _inject(supervisor, hosts=[_make_host("jet1")])
+def test_status_host_not_found(mock_wait, client, capsys):
+    _inject(client, hosts=[_make_host("jet1")])
     args = argparse.Namespace(command="status", host="nonexistent")
-    rc = commands.cmd_status(supervisor, args)
+    rc = commands.cmd_status(client, args)
     assert rc == 1
 
 
@@ -151,44 +151,44 @@ def test_status_host_not_found(mock_wait, supervisor, capsys):
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_start_calls_supervisor(mock_wait, mock_state, supervisor, capsys):
-    _inject(supervisor, procs=[_make_proc("cam", "jet1", state="T")])
-    supervisor.start_proc = MagicMock()
+def test_start_calls_client(mock_wait, mock_state, client, capsys):
+    _inject(client, procs=[_make_proc("cam", "jet1", state="T")])
+    client.start_proc = MagicMock()
     args = argparse.Namespace(command="start", name="cam", host="jet1")
-    rc = commands.cmd_start(supervisor, args)
+    rc = commands.cmd_start(client, args)
     assert rc == 0
-    supervisor.start_proc.assert_called_once_with("cam", "jet1")
+    client.start_proc.assert_called_once_with("cam", "jet1")
     assert "Started" in capsys.readouterr().out
 
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_stop_calls_supervisor(mock_wait, mock_state, supervisor, capsys):
-    _inject(supervisor, procs=[_make_proc("cam", "jet1")])
-    supervisor.stop_proc = MagicMock()
+def test_stop_calls_client(mock_wait, mock_state, client, capsys):
+    _inject(client, procs=[_make_proc("cam", "jet1")])
+    client.stop_proc = MagicMock()
     args = argparse.Namespace(command="stop", name="cam", host="jet1")
-    rc = commands.cmd_stop(supervisor, args)
+    rc = commands.cmd_stop(client, args)
     assert rc == 0
-    supervisor.stop_proc.assert_called_once_with("cam", "jet1")
+    client.stop_proc.assert_called_once_with("cam", "jet1")
 
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_restart_calls_stop_then_start(mock_wait, mock_state, supervisor):
-    _inject(supervisor, procs=[_make_proc("cam", "jet1")])
-    supervisor.stop_proc = MagicMock()
-    supervisor.start_proc = MagicMock()
+def test_restart_calls_stop_then_start(mock_wait, mock_state, client):
+    _inject(client, procs=[_make_proc("cam", "jet1")])
+    client.stop_proc = MagicMock()
+    client.start_proc = MagicMock()
     args = argparse.Namespace(command="restart", name="cam", host="jet1")
-    rc = commands.cmd_restart(supervisor, args)
+    rc = commands.cmd_restart(client, args)
     assert rc == 0
-    supervisor.stop_proc.assert_called_once_with("cam", "jet1")
-    supervisor.start_proc.assert_called_once_with("cam", "jet1")
+    client.stop_proc.assert_called_once_with("cam", "jet1")
+    client.start_proc.assert_called_once_with("cam", "jet1")
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_start_proc_not_found(mock_wait, supervisor, capsys):
+def test_start_proc_not_found(mock_wait, client, capsys):
     args = argparse.Namespace(command="start", name="nope", host="jet1")
-    rc = commands.cmd_start(supervisor, args)
+    rc = commands.cmd_start(client, args)
     assert rc == 1
     assert "not found" in capsys.readouterr().err
 
@@ -199,16 +199,16 @@ def test_start_proc_not_found(mock_wait, supervisor, capsys):
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_create_calls_supervisor(mock_wait, mock_state, supervisor, capsys):
-    supervisor.create_proc = MagicMock()
+def test_create_calls_client(mock_wait, mock_state, client, capsys):
+    client.create_proc = MagicMock()
     args = argparse.Namespace(
         command="create", name="svc", host="jet1",
         cmd="echo hi", group="core", auto_restart=True, realtime=False,
         isolated=False, work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
     )
-    rc = commands.cmd_create(supervisor, args)
+    rc = commands.cmd_create(client, args)
     assert rc == 0
-    supervisor.create_proc.assert_called_once_with(
+    client.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "jet1", True, False,
         work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
         isolated=False,
@@ -217,15 +217,15 @@ def test_create_calls_supervisor(mock_wait, mock_state, supervisor, capsys):
 
 @patch("dpm.cli.commands.wait_for_proc_gone", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_delete_calls_stop_and_del(mock_wait, mock_gone, supervisor, capsys):
-    _inject(supervisor, procs=[_make_proc("cam", "jet1")])
-    supervisor.stop_proc = MagicMock()
-    supervisor.del_proc = MagicMock()
+def test_delete_calls_stop_and_del(mock_wait, mock_gone, client, capsys):
+    _inject(client, procs=[_make_proc("cam", "jet1")])
+    client.stop_proc = MagicMock()
+    client.del_proc = MagicMock()
     args = argparse.Namespace(command="delete", name="cam", host="jet1")
-    rc = commands.cmd_delete(supervisor, args)
+    rc = commands.cmd_delete(client, args)
     assert rc == 0
-    supervisor.stop_proc.assert_called_once()
-    supervisor.del_proc.assert_called_once()
+    client.stop_proc.assert_called_once()
+    client.del_proc.assert_called_once()
     assert "Deleted" in capsys.readouterr().out
 
 
@@ -234,21 +234,21 @@ def test_delete_calls_stop_and_del(mock_wait, mock_gone, supervisor, capsys):
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_load_delegates_to_spec_io(mock_wait, supervisor, capsys):
+def test_load_delegates_to_spec_io(mock_wait, client, capsys):
     with patch("dpm.spec_io.load_and_create", return_value=(["a@h1"], [])) as mock_lc:
         args = argparse.Namespace(command="load", path="specs.yaml")
-        rc = commands.cmd_load(supervisor, args)
+        rc = commands.cmd_load(client, args)
     assert rc == 0
     mock_lc.assert_called_once()
     assert "1/1" in capsys.readouterr().out
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_save_delegates_to_spec_io(mock_wait, supervisor, capsys):
-    _inject(supervisor, hosts=[_make_host()])
+def test_save_delegates_to_spec_io(mock_wait, client, capsys):
+    _inject(client, hosts=[_make_host()])
     with patch("dpm.spec_io.save_all_process_specs", return_value=(3, 0)) as mock_save:
         args = argparse.Namespace(command="save", path="out.yaml", append=False)
-        rc = commands.cmd_save(supervisor, args)
+        rc = commands.cmd_save(client, args)
     assert rc == 0
     mock_save.assert_called_once()
     assert "3" in capsys.readouterr().out
@@ -259,14 +259,14 @@ def test_save_delegates_to_spec_io(mock_wait, supervisor, capsys):
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_start_all_sends_to_all_procs(mock_wait, supervisor, capsys):
-    _inject(supervisor, hosts=[_make_host()],
+def test_start_all_sends_to_all_procs(mock_wait, client, capsys):
+    _inject(client, hosts=[_make_host()],
             procs=[_make_proc("a", "jet1", "T"), _make_proc("b", "jet1", "T")])
-    supervisor.start_proc = MagicMock()
+    client.start_proc = MagicMock()
     args = argparse.Namespace(command="start-all")
-    rc = commands.cmd_start_all(supervisor, args)
+    rc = commands.cmd_start_all(client, args)
     assert rc == 0
-    assert supervisor.start_proc.call_count == 2
+    assert client.start_proc.call_count == 2
     assert "2" in capsys.readouterr().out
 
 
@@ -276,95 +276,95 @@ def test_start_all_sends_to_all_procs(mock_wait, supervisor, capsys):
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_move_ready_process(mock_wait, mock_state, supervisor, capsys):
+def test_move_ready_process(mock_wait, mock_state, client, capsys):
     """Move a READY process: create on dest, delete from source."""
-    _inject(supervisor,
+    _inject(client,
             hosts=[_make_host("jet1"), _make_host("jet2")],
             procs=[_make_proc("cam", "jet1", state="T")])
-    supervisor.create_proc = MagicMock()
-    supervisor.del_proc = MagicMock()
+    client.create_proc = MagicMock()
+    client.del_proc = MagicMock()
     # After create, simulate proc appearing on jet2
-    original_procs = supervisor._procs.copy()
+    original_procs = client._procs.copy()
     def _side_effect(*a, **kw):
-        supervisor._procs[("jet2", "cam")] = _make_proc("cam", "jet2", state="T")
-    supervisor.create_proc.side_effect = _side_effect
+        client._procs[("jet2", "cam")] = _make_proc("cam", "jet2", state="T")
+    client.create_proc.side_effect = _side_effect
 
     args = argparse.Namespace(command="move",
                               src_name="cam", src_host="jet1",
                               dst_name="cam", dst_host="jet2")
-    rc = commands.cmd_move(supervisor, args)
+    rc = commands.cmd_move(client, args)
     assert rc == 0
-    supervisor.create_proc.assert_called_once()
-    supervisor.del_proc.assert_called_once_with("cam", "jet1")
+    client.create_proc.assert_called_once()
+    client.del_proc.assert_called_once_with("cam", "jet1")
     assert "Moved" in capsys.readouterr().out
 
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_move_running_process_stops_first(mock_wait, mock_state, supervisor, capsys):
+def test_move_running_process_stops_first(mock_wait, mock_state, client, capsys):
     """Move a RUNNING process: stop on source, create+start on dest, delete source."""
-    _inject(supervisor,
+    _inject(client,
             hosts=[_make_host("jet1"), _make_host("jet2")],
             procs=[_make_proc("cam", "jet1", state="R")])
-    supervisor.stop_proc = MagicMock()
-    supervisor.start_proc = MagicMock()
-    supervisor.del_proc = MagicMock()
-    supervisor.create_proc = MagicMock(
-        side_effect=lambda *a, **kw: supervisor._procs.update(
+    client.stop_proc = MagicMock()
+    client.start_proc = MagicMock()
+    client.del_proc = MagicMock()
+    client.create_proc = MagicMock(
+        side_effect=lambda *a, **kw: client._procs.update(
             {("jet2", "cam"): _make_proc("cam", "jet2", state="T")}))
 
     args = argparse.Namespace(command="move",
                               src_name="cam", src_host="jet1",
                               dst_name="cam", dst_host="jet2")
-    rc = commands.cmd_move(supervisor, args)
+    rc = commands.cmd_move(client, args)
     assert rc == 0
-    supervisor.stop_proc.assert_called_once_with("cam", "jet1")
-    supervisor.start_proc.assert_called_once_with("cam", "jet2")
-    supervisor.del_proc.assert_called_once_with("cam", "jet1")
+    client.stop_proc.assert_called_once_with("cam", "jet1")
+    client.start_proc.assert_called_once_with("cam", "jet2")
+    client.del_proc.assert_called_once_with("cam", "jet1")
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_move_source_not_found(mock_wait, supervisor, capsys):
-    _inject(supervisor, hosts=[_make_host("jet1"), _make_host("jet2")])
+def test_move_source_not_found(mock_wait, client, capsys):
+    _inject(client, hosts=[_make_host("jet1"), _make_host("jet2")])
     args = argparse.Namespace(command="move",
                               src_name="nope", src_host="jet1",
                               dst_name="nope", dst_host="jet2")
-    rc = commands.cmd_move(supervisor, args)
+    rc = commands.cmd_move(client, args)
     assert rc == 1
     assert "not found" in capsys.readouterr().err
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_move_dest_host_not_responding(mock_wait, supervisor, capsys):
-    _inject(supervisor,
+def test_move_dest_host_not_responding(mock_wait, client, capsys):
+    _inject(client,
             hosts=[_make_host("jet1")],
             procs=[_make_proc("cam", "jet1")])
     args = argparse.Namespace(command="move",
                               src_name="cam", src_host="jet1",
                               dst_name="cam", dst_host="jet99")
-    rc = commands.cmd_move(supervisor, args)
+    rc = commands.cmd_move(client, args)
     assert rc == 1
     assert "not responding" in capsys.readouterr().err
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_move_with_rename(mock_wait, supervisor, capsys):
+def test_move_with_rename(mock_wait, client, capsys):
     """dpm move cam@jet1 cam2@jet2 — rename during move."""
-    _inject(supervisor,
+    _inject(client,
             hosts=[_make_host("jet1"), _make_host("jet2")],
             procs=[_make_proc("cam", "jet1", state="T")])
-    supervisor.create_proc = MagicMock(
-        side_effect=lambda *a, **kw: supervisor._procs.update(
+    client.create_proc = MagicMock(
+        side_effect=lambda *a, **kw: client._procs.update(
             {("jet2", "cam2"): _make_proc("cam2", "jet2", state="T")}))
-    supervisor.del_proc = MagicMock()
+    client.del_proc = MagicMock()
 
     args = argparse.Namespace(command="move",
                               src_name="cam", src_host="jet1",
                               dst_name="cam2", dst_host="jet2")
-    rc = commands.cmd_move(supervisor, args)
+    rc = commands.cmd_move(client, args)
     assert rc == 0
     # Verify create used the new name
-    call_args = supervisor.create_proc.call_args
+    call_args = client.create_proc.call_args
     assert call_args[0][0] == "cam2"  # new name
     assert "cam2@jet2" in capsys.readouterr().out
 
@@ -457,7 +457,7 @@ def test_argparse_create_with_new_fields():
     assert args.mem_limit == 1073741824
 
 
-def test_create_forwards_new_fields_to_supervisor():
+def test_create_forwards_new_fields_to_client():
     from unittest.mock import MagicMock, patch
     from dpm.cli.commands import cmd_create
 

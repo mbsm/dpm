@@ -106,66 +106,66 @@ def resolve_waves(groups: Dict[str, Dict]) -> List[List[str]]:
     return waves
 
 
-def _procs_in_group(supervisor, group_name: str) -> List[Tuple[str, str]]:
+def _procs_in_group(client, group_name: str) -> List[Tuple[str, str]]:
     """Return list of (host, name) for all processes in a group."""
     return [
         (host, name)
-        for (host, name), info in supervisor.procs.items()
+        for (host, name), info in client.procs.items()
         if (getattr(info, "group", "") or "") == group_name
     ]
 
 
-def _start_group(supervisor, group_name: str) -> List[Tuple[str, str]]:
+def _start_group(client, group_name: str) -> List[Tuple[str, str]]:
     """Start all processes in a group across all hosts. Returns the proc list."""
-    procs = _procs_in_group(supervisor, group_name)
+    procs = _procs_in_group(client, group_name)
     hosts = {host for host, _ in procs}
     for host in hosts:
-        supervisor.start_group(group_name, host)
+        client.start_group(group_name, host)
     return procs
 
 
-def _stop_group(supervisor, group_name: str) -> List[Tuple[str, str]]:
+def _stop_group(client, group_name: str) -> List[Tuple[str, str]]:
     """Stop all processes in a group across all hosts. Returns the proc list."""
-    procs = _procs_in_group(supervisor, group_name)
+    procs = _procs_in_group(client, group_name)
     hosts = {host for host, _ in procs}
     for host in hosts:
-        supervisor.stop_group(group_name, host)
+        client.stop_group(group_name, host)
     return procs
 
 
 def _wait_group_running(
-    supervisor, group_name: str, timeout: float
+    client, group_name: str, timeout: float
 ) -> Tuple[bool, List[str]]:
     """Wait until all processes in the group are running.
 
     Returns (success, list_of_failed_proc_labels).
     """
-    procs = _procs_in_group(supervisor, group_name)
+    procs = _procs_in_group(client, group_name)
     failed = []
     for host, name in procs:
-        if not wait_for_state(supervisor, name, host, target="R", timeout=timeout):
+        if not wait_for_state(client, name, host, target="R", timeout=timeout):
             failed.append(f"{name}@{host}")
     return len(failed) == 0, failed
 
 
 def _wait_group_stopped(
-    supervisor, group_name: str, timeout: float
+    client, group_name: str, timeout: float
 ) -> Tuple[bool, List[str]]:
     """Wait until all processes in the group are stopped."""
-    procs = _procs_in_group(supervisor, group_name)
+    procs = _procs_in_group(client, group_name)
     failed = []
     for host, name in procs:
-        if not wait_for_state(supervisor, name, host, not_target="R", timeout=timeout):
+        if not wait_for_state(client, name, host, not_target="R", timeout=timeout):
             failed.append(f"{name}@{host}")
     return len(failed) == 0, failed
 
 
-def _create_processes(supervisor, processes: List[Dict[str, Any]]) -> int:
+def _create_processes(client, processes: List[Dict[str, Any]]) -> int:
     """Create process definitions. Returns number of errors."""
     errors = 0
     for spec in processes:
         try:
-            supervisor.create_proc(
+            client.create_proc(
                 spec["name"],
                 spec["cmd"],
                 spec.get("group", ""),
@@ -185,7 +185,7 @@ def _create_processes(supervisor, processes: List[Dict[str, Any]]) -> int:
     return errors
 
 
-def run_launch(supervisor, path: str, reverse: bool = False) -> int:
+def run_launch(client, path: str, reverse: bool = False) -> int:
     """Execute a launch file. Returns exit code (0=success)."""
     script = parse_launch_file(path)
     groups = script["groups"]
@@ -205,7 +205,7 @@ def run_launch(supervisor, path: str, reverse: bool = False) -> int:
     # On launch: create processes first (if any)
     if not reverse and script["processes"]:
         print(f"Creating {len(script['processes'])} processes...")
-        errors = _create_processes(supervisor, script["processes"])
+        errors = _create_processes(client, script["processes"])
         if errors:
             print(f"  {errors} error(s) during process creation", file=sys.stderr)
             return 1
@@ -224,13 +224,13 @@ def run_launch(supervisor, path: str, reverse: bool = False) -> int:
         if reverse:
             # Stop all groups in this wave
             for group_name in wave:
-                procs = _stop_group(supervisor, group_name)
+                procs = _stop_group(client, group_name)
                 count = len(procs)
                 print(f"    Stopping {group_name} ({count} processes)")
 
             # Wait for all to stop
             for group_name in wave:
-                ok, failed = _wait_group_stopped(supervisor, group_name, timeout)
+                ok, failed = _wait_group_stopped(client, group_name, timeout)
                 if not ok:
                     print(
                         f"    TIMEOUT: {group_name} not fully stopped: {', '.join(failed)}",
@@ -240,13 +240,13 @@ def run_launch(supervisor, path: str, reverse: bool = False) -> int:
         else:
             # Start all groups in this wave in parallel
             for group_name in wave:
-                procs = _start_group(supervisor, group_name)
+                procs = _start_group(client, group_name)
                 count = len(procs)
                 print(f"    Starting {group_name} ({count} processes)")
 
             # Wait for all to reach Running
             for group_name in wave:
-                ok, failed = _wait_group_running(supervisor, group_name, timeout)
+                ok, failed = _wait_group_running(client, group_name, timeout)
                 if not ok:
                     print(
                         f"    FAILED: {group_name} not running: {', '.join(failed)}",
