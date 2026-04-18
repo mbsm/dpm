@@ -383,14 +383,14 @@ class MainWindow(QMainWindow):
         lcm_url_action.triggered.connect(self._change_lcm_url)
         settings_menu.addAction(lcm_url_action)
 
-        agent_menu = menu_bar.addMenu("&Agent")
-        spawn_action = QAction("&Spawn Local Agent", self)
-        spawn_action.triggered.connect(self.spawn_local_agent)
-        agent_menu.addAction(spawn_action)
+        daemon_menu = menu_bar.addMenu("&Daemon")
+        spawn_action = QAction("&Spawn Local Daemon", self)
+        spawn_action.triggered.connect(self.spawn_local_daemon)
+        daemon_menu.addAction(spawn_action)
 
-        stop_action = QAction("S&top Local Agent", self)
-        stop_action.triggered.connect(self.stop_local_agent)
-        agent_menu.addAction(stop_action)
+        stop_action = QAction("S&top Local Daemon", self)
+        stop_action.triggered.connect(self.stop_local_daemon)
+        daemon_menu.addAction(stop_action)
 
         # Process menu
         process_menu = menu_bar.addMenu("&Process")
@@ -1100,28 +1100,28 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to change LCM URL:\n{e}")
 
-    def spawn_local_agent(self):
+    def spawn_local_daemon(self):
         try:
-            from dpm.utils.local_agent import spawn_local_agent
+            from dpm.gui.local_daemon import spawn_local_daemon
 
-            pid, logfile = spawn_local_agent()
+            pid, logfile = spawn_local_daemon()
             QMessageBox.information(
-                self, "Agent", f"Spawned agent PID {pid} -> {logfile}"
+                self, "Daemon", f"Spawned daemon PID {pid} -> {logfile}"
             )
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to spawn local agent: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to spawn local daemon: {e}")
 
-    def stop_local_agent(self):
+    def stop_local_daemon(self):
         try:
-            from dpm.utils.local_agent import stop_last_spawned_agent
+            from dpm.gui.local_daemon import stop_last_spawned_daemon
 
-            terminated = stop_last_spawned_agent()
+            terminated = stop_last_spawned_daemon()
             if terminated:
-                QMessageBox.information(self, "Agent", "Stopped local agent.")
+                QMessageBox.information(self, "Daemon", "Stopped local daemon.")
             else:
-                QMessageBox.information(self, "Agent", "Stopped local agent (killed).")
+                QMessageBox.information(self, "Daemon", "Stopped local daemon (killed).")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to stop local agent: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to stop local daemon: {e}")
 
     # --- Selection helpers ---
     def _selected_host(self):

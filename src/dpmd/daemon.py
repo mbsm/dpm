@@ -184,7 +184,7 @@ class Daemon:
             logging.error("LCM reinit failed: %s", e2)
 
     def load_config(self, config_path: str) -> dict:
-        from dpm.utils.config import load_dpm_config
+        from dpm.config import load_dpm_config
 
         config = load_dpm_config(config_path, [
             "command_channel",

@@ -97,7 +97,7 @@ class Client:
         self._init_lcm()
 
     def load_config(self, config_path: str) -> dict:
-        from dpm.utils.config import load_dpm_config
+        from dpm.config import load_dpm_config
 
         return load_dpm_config(config_path, [
             "command_channel",
