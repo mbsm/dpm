@@ -8,12 +8,12 @@ This project is inspired by `libbot procman` and is developed primarily for lear
 
 DPM has two primary roles:
 
-- **Agent**: runs on each Linux host (typically as a `systemd` service via `dpm-agent.service`). It starts/stops/monitors local processes and reports state/output back to the supervisor.
-- **Supervisor + GUI**: runs on an operator machine (or one host in the cluster). It sends commands to agents and displays host/process state and output.
+- **Daemon**: runs on each Linux host (typically as a `systemd` service via `dpmd.service`). It starts/stops/monitors local processes and reports state/output back to the client.
+- **Client + GUI**: runs on an operator machine (or one host in the cluster). It sends commands to daemons and displays host/process state and output.
 
 ## 2. Components
 
-### 2.1 Agent (dpm-agent)
+### 2.1 Daemon (dpmd)
 Responsibilities:
 - Maintain a local registry of managed processes (specs + runtime state).
 - Execute actions: create, start, stop, delete.
@@ -25,13 +25,13 @@ Responsibilities:
 
 Runtime environment:
 - Runs as a low-privilege service user.
-- Managed by systemd (`dpm-agent.service`).
+- Managed by systemd (`dpmd.service`).
 
-### 2.2 Supervisor + GUI
+### 2.2 Client + GUI
 Responsibilities:
-- Discover and list active hosts (agents publishing).
+- Discover and list active hosts (daemons publishing).
 - Show processes per host and their states.
-- Send commands to agents (create/start/stop/delete).
+- Send commands to daemons (create/start/stop/delete).
 - Show streamed output per process (stdout/stderr).
 - Persist/load process specs via YAML.
 
@@ -41,10 +41,10 @@ Responsibilities:
 ## 3. LCM message model (current)
 
 Current messages (LCM types):
-- `command_t`: GUI → Agent (requests an action)
-- `host_info_t`: Agent → GUI (host telemetry)
-- `host_procs_t`: Agent → GUI (process table snapshot)
-- `proc_output_t`: Agent → GUI (stdout/stderr chunks)
+- `command_t`: GUI → Daemon (requests an action)
+- `host_info_t`: Daemon → GUI (host telemetry)
+- `host_procs_t`: Daemon → GUI (process table snapshot)
+- `proc_output_t`: Daemon → GUI (stdout/stderr chunks)
 - `proc_info_t`: embedded inside `host_procs_t`
 
 Current behavior:
@@ -86,7 +86,7 @@ Per-process `realtime` flag uses `SCHED_FIFO` with configurable priority via `rt
 
 ### 5.1 Cgroups v2
 
-Processes can be assigned CPU affinity, CPU bandwidth limits, memory limits, and exclusive core reservation via cgroups v2. The agent creates per-process cgroup directories under `/sys/fs/cgroup/<agent-cgroup>/<process_name>/` and cleans them up on stop/delete.
+Processes can be assigned CPU affinity, CPU bandwidth limits, memory limits, and exclusive core reservation via cgroups v2. The daemon creates per-process cgroup directories under `/sys/fs/cgroup/<daemon-cgroup>/<process_name>/` and cleans them up on stop/delete.
 
 Per-process fields: `cpuset`, `cpu_limit`, `mem_limit`, `isolated`.
 
@@ -102,7 +102,7 @@ YAML-based dependency graph for multi-host startup/shutdown. Groups start in par
 
 ### 5.4 Stale host eviction
 
-The supervisor automatically removes hosts that stop reporting telemetry (3x their `report_interval`), keeping the UI and CLI clean.
+The client automatically removes hosts that stop reporting telemetry (3x their `report_interval`), keeping the UI and CLI clean.
 
 ### 5.5 Future enhancements
 - Health checks (readiness probes, port checks)
@@ -117,38 +117,38 @@ One source package (`dpm`) produces three binary `.deb` packages:
 
 | Package | Purpose | Key files installed |
 |---------|---------|---------------------|
-| **`python3-dpm`** | Python library + all entry points | `/usr/bin/dpm-agent`, `/usr/bin/dpm`, `/usr/bin/dpm-gui`, `/usr/lib/python3/dist-packages/dpm/`, `/usr/lib/python3/dist-packages/dpm_msgs/` |
-| **`dpm-agent`** | Agent systemd service + config | `/lib/systemd/system/dpm-agent.service`, `/etc/dpm/dpm.yaml`, `/etc/security/limits.d/99-dpm-realtime.conf` |
+| **`python3-dpm`** | Python library + all entry points | `/usr/bin/dpmd`, `/usr/bin/dpm`, `/usr/bin/dpm-gui`, `/usr/lib/python3/dist-packages/dpm/`, `/usr/lib/python3/dist-packages/dpm_msgs/` |
+| **`dpmd`** | Daemon systemd service + config | `/lib/systemd/system/dpmd.service`, `/etc/dpm/dpm.yaml`, `/etc/security/limits.d/99-dpm-realtime.conf` |
 | **`dpm-tools`** | GUI desktop integration | `/usr/share/applications/dpm-gui.desktop`, `/usr/share/icons/hicolor/256x256/apps/dpm-gui.png` |
 
-Both `dpm-agent` and `dpm-tools` depend on `python3-dpm`, which is auto-installed by `apt`.
+Both `dpmd` and `dpm-tools` depend on `python3-dpm`, which is auto-installed by `apt`.
 
 ### What happens on install
 
-**`apt install ./dpm-agent_*.deb`** triggers `dpm-agent.postinst` which:
+**`apt install ./dpmd_*.deb`** triggers `dpmd.postinst` which:
 
 1. Creates system user `dpm` (no home, no shell) via `adduser --system`
 2. Adds `dpm` to `video`, `render`, `plugdev` groups (GPU and USB camera access)
 3. Creates `/var/log/dpm/` owned by `dpm:dpm`
 4. Runs `systemctl daemon-reload`
-5. Runs `systemctl enable dpm-agent.service`
-6. Runs `systemctl start dpm-agent.service`
+5. Runs `systemctl enable dpmd.service`
+6. Runs `systemctl start dpmd.service`
 
-**`apt remove dpm-agent`** triggers `dpm-agent.prerm` which stops and disables the service.
+**`apt remove dpmd`** triggers `dpmd.prerm` which stops and disables the service.
 
-**`apt purge dpm-agent`** triggers `dpm-agent.postrm` which also removes `/etc/dpm/` and `/var/log/dpm/`.
+**`apt purge dpmd`** triggers `dpmd.postrm` which also removes `/etc/dpm/` and `/var/log/dpm/`.
 
 ### Build tooling
 
-- `debian/control` with three binary stanzas (`python3-dpm`, `dpm-agent`, `dpm-tools`)
+- `debian/control` with three binary stanzas (`python3-dpm`, `dpmd`, `dpm-tools`)
 - `debian/rules` using `dh` + `pybuild` (dh-python)
 - `debian/*.install` manifests for file placement
-- `debian/dpm-agent.postinst` / `.prerm` / `.postrm` — maintainer scripts for service lifecycle
+- `debian/dpmd.postinst` / `.prerm` / `.postrm` — maintainer scripts for service lifecycle
 - LCM Python bindings ship pre-generated in `src/dpm_msgs/` (no build-time `lcm-gen` dependency)
 
 ### Acceptance criteria
 
-- `apt install dpm-agent` results in a running service (`systemctl status dpm-agent`)
+- `apt install dpmd` results in a running service (`systemctl status dpmd`)
 - `apt install dpm-tools` provides `dpm` CLI; GUI works if `python3-pyqt5` is installed
 - `apt upgrade` preserves `/etc/dpm/dpm.yaml` edits (conffile behavior)
 - `apt remove` stops services; `apt purge` removes config and logs
@@ -190,7 +190,7 @@ This allows:
 - clear mapping from user action → node response
 
 #### B) Add a single “proc event” response that includes ACK + minimal state
-Introduce a new LCM message (example name: `proc_event_t`) published by agents, containing:
+Introduce a new LCM message (example name: `proc_event_t`) published by daemons, containing:
 
 - `timestamp`
 - `hostname`

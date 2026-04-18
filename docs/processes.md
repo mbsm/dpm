@@ -66,6 +66,6 @@ This provides low-preemption execution suitable for latency-sensitive workloads 
 
 For full kernel-level scheduler isolation, add `isolcpus=<cores>` to the kernel command line (e.g., `isolcpus=20-23`). DPM's cpuset affinity then ensures only your processes run on those reserved cores.
 
-The agent creates cgroup directories under `/sys/fs/cgroup/dpm/<process>/` and cleans them up on stop/delete.
+The daemon creates cgroup directories under `/sys/fs/cgroup/dpm/<process>/` and cleans them up on stop/delete.
 
-**Requirements:** cgroups v2 unified hierarchy and `Delegate=yes` in the systemd service unit (included in the `dpm-agent` package). On development machines without cgroup access, processes run without limits (graceful degradation).
+**Requirements:** cgroups v2 unified hierarchy and `Delegate=yes` in the systemd service unit (included in the `dpmd` package). On development machines without cgroup access, processes run without limits (graceful degradation).

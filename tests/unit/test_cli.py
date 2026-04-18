@@ -104,11 +104,11 @@ def _inject(client, hosts=None, procs=None):
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=False)
-def test_status_no_agents(mock_wait, client, capsys):
+def test_status_no_daemons(mock_wait, client, capsys):
     args = argparse.Namespace(command="status", host=None)
     rc = commands.cmd_status(client, args)
     assert rc == 2
-    assert "No agents" in capsys.readouterr().err
+    assert "No daemons" in capsys.readouterr().err
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)

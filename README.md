@@ -9,13 +9,13 @@ A lightweight distributed process manager for trusted Linux clusters. DPM uses [
 - **Dependency-aware launch files** — declarative YAML startup/shutdown with parallel wave execution
 - **Resource isolation** — per-process cgroups v2 with cpuset pinning, CPU bandwidth limits, and memory caps
 - **Auto-restart with backoff** — exponential backoff with configurable circuit breaker
-- **Process persistence** — optionally save and restore process definitions across agent restarts
-- **Multiple interfaces** — PyQt5 GUI, full-featured CLI, or build your own client on top of the Supervisor library
+- **Process persistence** — optionally save and restore process definitions across daemon restarts
+- **Multiple interfaces** — PyQt5 GUI, full-featured CLI, or build your own UI on top of the `dpm.Client` library
 
 ## Components
 
-- **Agent (`dpm-agent`)** — runs on each host, manages local processes, publishes telemetry over LCM.
-- **Supervisor** — UI-agnostic library that subscribes to agent telemetry and dispatches commands.
+- **Daemon (`dpmd`)** — runs on each host, manages local processes, publishes telemetry over LCM.
+- **Client** — UI-agnostic library that subscribes to daemon telemetry and dispatches commands.
 - **GUI (`dpm-gui`)** — PyQt5 desktop app with host cards, process tree, live output, and launch/shutdown dialogs.
 - **CLI (`dpm`)** — scriptable command-line interface for headless servers and automation.
 
@@ -30,8 +30,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[gui,dev]"
 
-# Start agent
-DPM_CONFIG=./dpm.yaml dpm-agent
+# Start daemon
+DPM_CONFIG=./dpm.yaml dpmd
 
 # Start GUI (in another terminal)
 DPM_CONFIG=./dpm.yaml dpm-gui
@@ -40,7 +40,7 @@ DPM_CONFIG=./dpm.yaml dpm-gui
 To run from the repo without installing:
 
 ```bash
-PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.agent.agent
+PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpmd
 PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.gui.main
 ```
 
@@ -65,12 +65,17 @@ pytest -m integration     # integration tests (requires live LCM multicast)
 ```
 src/
   dpm/
-    agent/            # Agent daemon — one per host
-    supervisor/       # Supervisor library — telemetry aggregation, command dispatch
+    client.py         # Client library — telemetry aggregation, command dispatch
     cli/              # CLI tool — scriptable interface
     gui/              # PyQt5 GUI — desktop application
-    utils/            # Shared utilities
+    config.py         # YAML config loader (shared with dpmd)
     spec_io.py        # YAML process spec save/load
+  dpmd/               # Daemon — one per host
+    daemon.py         # lifecycle + state
+    processes.py      # process start/stop/monitor
+    commands.py       # LCM command dispatch
+    telemetry.py      # publish host/proc telemetry
+    cgroups.py        # cgroups v2 helpers
   dpm_msgs/           # Generated LCM message bindings
 ```
 

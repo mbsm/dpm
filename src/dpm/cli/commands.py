@@ -16,8 +16,8 @@ from dpm.cli.formatting import (
 from dpm.cli.wait import wait_for_proc_gone, wait_for_state, wait_for_telemetry
 
 
-def _no_agents():
-    print("No agents responding. Check that dpm-agent is running and LCM multicast is reachable.",
+def _no_daemons():
+    print("No daemons responding. Check that dpmd is running and LCM multicast is reachable.",
           file=sys.stderr)
     return 2
 
@@ -69,7 +69,7 @@ def _proc_rows(procs, host_filter=None):
 
 def cmd_status(client, args) -> int:
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     host_filter = args.host
 
@@ -101,7 +101,7 @@ def cmd_status(client, args) -> int:
 
 def cmd_hosts(client, args) -> int:
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     h_rows = _host_rows(client.hosts)
     if h_rows:
@@ -120,7 +120,7 @@ def _require_proc(client, args):
     Returns (name, host) on success, or None and prints an error.
     """
     if not wait_for_telemetry(client):
-        _no_agents()
+        _no_daemons()
         return None
     name, host = args.name, args.host
     if (host, name) not in client.procs:
@@ -251,7 +251,7 @@ def cmd_export(client, args) -> int:
     from dpm.spec_io import save_all_process_specs
 
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     try:
         written, skipped = save_all_process_specs(args.path, client, append=args.append)
@@ -266,7 +266,7 @@ def cmd_export(client, args) -> int:
 
 def cmd_start_all(client, args) -> int:
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     procs = client.procs
     count = 0
@@ -280,7 +280,7 @@ def cmd_start_all(client, args) -> int:
 
 def cmd_stop_all(client, args) -> int:
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     procs = client.procs
     count = 0
@@ -298,7 +298,7 @@ def cmd_set_persistence(client, args) -> int:
 
     if host:
         if not wait_for_telemetry(client):
-            return _no_agents()
+            return _no_daemons()
         if host not in client.hosts:
             available = ", ".join(sorted(client.hosts.keys()))
             print(f"Host '{host}' not responding. Available: {available}", file=sys.stderr)
@@ -321,7 +321,7 @@ def cmd_set_interval(client, args) -> int:
     if host:
         # Targeted: send to specific host
         if not wait_for_telemetry(client):
-            return _no_agents()
+            return _no_daemons()
         if host not in client.hosts:
             available = ", ".join(sorted(client.hosts.keys()))
             print(f"Host '{host}' not responding. Available: {available}", file=sys.stderr)
@@ -337,7 +337,7 @@ def cmd_set_interval(client, args) -> int:
 
 def cmd_move(client, args) -> int:
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     src_name, src_host = args.src_name, args.src_host
     dst_name, dst_host = args.dst_name, args.dst_host
@@ -413,7 +413,7 @@ def cmd_launch(client, args) -> int:
     from dpm.cli.launch import run_launch
 
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     return run_launch(client, args.path, reverse=False)
 
@@ -422,7 +422,7 @@ def cmd_shutdown(client, args) -> int:
     from dpm.cli.launch import run_launch
 
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     return run_launch(client, args.path, reverse=True)
 
@@ -432,7 +432,7 @@ def cmd_logs(client, args) -> int:
     host = args.host
 
     if not wait_for_telemetry(client):
-        return _no_agents()
+        return _no_daemons()
 
     # Resolve host if not provided
     if host is None:
