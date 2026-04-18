@@ -1,0 +1,65 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Create the dpm system user if it doesn't exist
+        if ! getent passwd dpm >/dev/null 2>&1; then
+            adduser --system --group --no-create-home --quiet dpm
+        fi
+
+        # Grant device access groups (GPU, USB cameras)
+        for grp in video render plugdev; do
+            if getent group "$grp" >/dev/null 2>&1; then
+                usermod -a -G "$grp" dpm 2>/dev/null || true
+            fi
+        done
+
+        # Create log and data directories
+        mkdir -p /var/log/dpm
+        chown dpm:dpm /var/log/dpm
+        mkdir -p /var/lib/dpm
+        chown dpm:dpm /var/lib/dpm
+
+        # Enable and start the service
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload
+            systemctl enable dpm-agent.service
+            systemctl start dpm-agent.service || true
+        fi
+        ;;
+esac
+
+# Automatically added by dh_installsystemd/13.14.1ubuntu5
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	# The following line should be removed in trixie or trixie+1
+	deb-systemd-helper unmask 'dpm-agent.service' >/dev/null || true
+
+	# was-enabled defaults to true, so new installations run enable.
+	if deb-systemd-helper --quiet was-enabled 'dpm-agent.service'; then
+		# Enables the unit on first installation, creates new
+		# symlinks on upgrades if the unit file has changed.
+		deb-systemd-helper enable 'dpm-agent.service' >/dev/null || true
+	else
+		# Update the statefile to add new symlinks (if any), which need to be
+		# cleaned up on purge. Also remove old symlinks.
+		deb-systemd-helper update-state 'dpm-agent.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+# Automatically added by dh_installsystemd/13.14.1ubuntu5
+if [ "$1" = "configure" ] || [ "$1" = "abort-upgrade" ] || [ "$1" = "abort-deconfigure" ] || [ "$1" = "abort-remove" ] ; then
+	if [ -d /run/systemd/system ]; then
+		systemctl --system daemon-reload >/dev/null || true
+		if [ -n "$2" ]; then
+			_dh_action=restart
+		else
+			_dh_action=start
+		fi
+		deb-systemd-invoke $_dh_action 'dpm-agent.service' >/dev/null || true
+	fi
+fi
+# End automatically added section
+
+
+exit 0

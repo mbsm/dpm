@@ -24,8 +24,8 @@ case "$1" in
         # Enable and start the service
         if [ -d /run/systemd/system ]; then
             systemctl daemon-reload
-            systemctl enable dpm-agent.service
-            systemctl start dpm-agent.service || true
+            systemctl enable dpmd.service
+            systemctl start dpmd.service || true
         fi
         ;;
 esac

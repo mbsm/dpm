@@ -1,0 +1,35 @@
+[Unit]
+Description=DPM Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dpm
+Group=dpm
+# Cgroup delegation for per-process resource limits
+Delegate=yes
+
+Environment=DPM_CONFIG=/etc/dpm/dpm.yaml
+ExecStart=/usr/bin/dpmd
+
+Restart=always
+RestartSec=2
+
+# Realtime scheduling permissions
+LimitRTPRIO=99
+AmbientCapabilities=CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE
+
+# Logging via journald
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=read-only
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

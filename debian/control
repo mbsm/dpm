@@ -23,20 +23,20 @@ Depends:
 Recommends:
  python3-lcm,
 Description: Distributed Process Manager - Python library
- DPM Python packages: agent, supervisor, CLI, GUI, and LCM message
- bindings. Provides /usr/bin/dpm-agent, /usr/bin/dpm, and /usr/bin/dpm-gui.
+ DPM Python packages: daemon (dpmd), client, CLI, GUI, and LCM message
+ bindings. Provides /usr/bin/dpmd, /usr/bin/dpm, and /usr/bin/dpm-gui.
 
-Package: dpm-agent
+Package: dpmd
 Architecture: all
 Depends:
  ${misc:Depends},
  python3-dpm (= ${binary:Version}),
-Description: Distributed Process Manager - agent service
- DPM agent that runs on each host in a trusted Linux cluster.
+Description: Distributed Process Manager - daemon service
+ DPM daemon that runs on each host in a trusted Linux cluster.
  It manages local processes (start/stop/monitor) and publishes
  telemetry and process output over LCM multicast.
  .
- Typically deployed as a systemd service (dpm-agent.service).
+ Typically deployed as a systemd service (dpmd.service).
  .
  This package installs the systemd unit and default config.
 
