@@ -55,15 +55,3 @@ dpm set-persistence @jet1 on            # enable process persistence
 ```
 
 Run `dpm <command> --help` for full option listings.
-
-## Deprecated verbs
-
-The following verbs still work but emit a deprecation warning and will be
-removed in a future release:
-
-| Deprecated | Use instead |
-|---|---|
-| `dpm create` | `dpm add` |
-| `dpm delete` | `dpm remove` |
-| `dpm save`   | `dpm export` |
-| `dpm load`   | `dpm import` |

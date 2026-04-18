@@ -194,15 +194,15 @@ def test_start_proc_not_found(mock_wait, client, capsys):
 
 
 # ---------------------------------------------------------------------------
-# create / delete
+# add / remove
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_create_calls_client(mock_wait, mock_state, client, capsys):
+def test_add_calls_client(mock_wait, mock_state, client, capsys):
     client.create_proc = MagicMock()
     args = argparse.Namespace(
-        command="create", name="svc", host="jet1",
+        command="add", name="svc", host="jet1",
         cmd="echo hi", group="core", auto_restart=True, realtime=False,
         isolated=False, work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
     )
@@ -217,11 +217,11 @@ def test_create_calls_client(mock_wait, mock_state, client, capsys):
 
 @patch("dpm.cli.commands.wait_for_proc_gone", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_delete_calls_stop_and_del(mock_wait, mock_gone, client, capsys):
+def test_remove_calls_stop_and_del(mock_wait, mock_gone, client, capsys):
     _inject(client, procs=[_make_proc("cam", "jet1")])
     client.stop_proc = MagicMock()
     client.del_proc = MagicMock()
-    args = argparse.Namespace(command="delete", name="cam", host="jet1")
+    args = argparse.Namespace(command="remove", name="cam", host="jet1")
     rc = commands.cmd_remove(client, args)
     assert rc == 0
     client.stop_proc.assert_called_once()
@@ -230,13 +230,13 @@ def test_delete_calls_stop_and_del(mock_wait, mock_gone, client, capsys):
 
 
 # ---------------------------------------------------------------------------
-# load / save
+# import / export
 # ---------------------------------------------------------------------------
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
 def test_load_delegates_to_spec_io(mock_wait, client, capsys):
     with patch("dpm.spec_io.load_and_create", return_value=(["a@h1"], [])) as mock_lc:
-        args = argparse.Namespace(command="load", path="specs.yaml")
+        args = argparse.Namespace(command="import", path="specs.yaml")
         rc = commands.cmd_import(client, args)
     assert rc == 0
     mock_lc.assert_called_once()
@@ -244,10 +244,10 @@ def test_load_delegates_to_spec_io(mock_wait, client, capsys):
 
 
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
-def test_save_delegates_to_spec_io(mock_wait, client, capsys):
+def test_export_delegates_to_spec_io(mock_wait, client, capsys):
     _inject(client, hosts=[_make_host()])
     with patch("dpm.spec_io.save_all_process_specs", return_value=(3, 0)) as mock_save:
-        args = argparse.Namespace(command="save", path="out.yaml", append=False)
+        args = argparse.Namespace(command="export", path="out.yaml", append=False)
         rc = commands.cmd_export(client, args)
     assert rc == 0
     mock_save.assert_called_once()
@@ -401,10 +401,10 @@ def test_argparse_start():
     assert args.target == "cam@jet1"
 
 
-def test_argparse_create():
+def test_argparse_add():
     parser = build_parser()
-    args = parser.parse_args(["create", "svc@jet1", "--cmd", "echo hi", "-g", "core", "--auto-restart"])
-    assert args.command == "create"
+    args = parser.parse_args(["add", "svc@jet1", "--cmd", "echo hi", "-g", "core", "--auto-restart"])
+    assert args.command == "add"
     assert args.cmd == "echo hi"
     assert args.group == "core"
     assert args.auto_restart is True
@@ -438,11 +438,11 @@ def test_argparse_shutdown():
     assert args.path == "system.yaml"
 
 
-def test_argparse_create_with_new_fields():
+def test_argparse_add_with_new_fields():
     from dpm.cli.cli import build_parser, _resolve_args
     parser = build_parser()
     args = parser.parse_args([
-        "create", "foo@host1", "--cmd", "echo hi",
+        "add", "foo@host1", "--cmd", "echo hi",
         "--work-dir", "/opt/robot",
         "--cpuset", "0,1",
         "--cpu-limit", "1.5",
@@ -457,7 +457,7 @@ def test_argparse_create_with_new_fields():
     assert args.mem_limit == 1073741824
 
 
-def test_create_forwards_new_fields_to_client():
+def test_add_forwards_new_fields_to_client():
     from unittest.mock import MagicMock, patch
     from dpm.cli.commands import cmd_add
 
@@ -466,7 +466,7 @@ def test_create_forwards_new_fields_to_client():
     mock_sup.procs = {}
 
     args = MagicMock()
-    args.command = "create"
+    args.command = "add"
     args.name = "foo"
     args.host = "host1"
     args.cmd = "echo hi"

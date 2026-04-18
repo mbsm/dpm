@@ -27,15 +27,6 @@ from dpm.cli.commands import (
     cmd_stop_group,
 )
 
-# Deprecated verb → current verb. Warned at runtime; dispatch falls through
-# to the current handler. Remove after the next release.
-DEPRECATED_VERBS = {
-    "create": "add",
-    "delete": "remove",
-    "save": "export",
-    "load": "import",
-}
-
 DISPATCH = {
     "status": cmd_status,
     "hosts": cmd_hosts,
@@ -56,11 +47,6 @@ DISPATCH = {
     "logs": cmd_logs,
     "launch": cmd_launch,
     "shutdown": cmd_shutdown,
-    # Deprecated aliases (handler shared with current verb).
-    "create": cmd_add,
-    "delete": cmd_remove,
-    "save": cmd_export,
-    "load": cmd_import,
 }
 
 
@@ -128,8 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_restart.add_argument("target", help="name@host")
 
     # dpm create name@host --cmd "command" [-g group] [--auto-restart] [--realtime]
-    p_add = sub.add_parser("add", aliases=["create"],
-                           help="Register a process (alias: create — deprecated)")
+    p_add = sub.add_parser("add", help="Register a process")
     p_add.add_argument("target", help="name@host")
     p_add.add_argument("--cmd", required=True, help="Command to execute")
     p_add.add_argument("-g", "--group", default="", help="Process group")
@@ -144,9 +129,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("--mem-limit", type=int, default=0,
                        help="Memory limit in bytes")
 
-    # dpm remove name@host  (alias: delete)
-    p_remove = sub.add_parser("remove", aliases=["delete"],
-                              help="Stop and unregister a process (alias: delete — deprecated)")
+    # dpm remove name@host
+    p_remove = sub.add_parser("remove", help="Stop and unregister a process")
     p_remove.add_argument("target", help="name@host")
 
     # dpm start-group group@host
@@ -157,14 +141,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_stg = sub.add_parser("stop-group", help="Stop all processes in a group")
     p_stg.add_argument("target", help="group@host")
 
-    # dpm import spec.yaml  (alias: load)
-    p_import = sub.add_parser("import", aliases=["load"],
-                              help="Register processes from a YAML spec (alias: load — deprecated)")
+    # dpm import spec.yaml
+    p_import = sub.add_parser("import", help="Register processes from a YAML spec")
     p_import.add_argument("path", help="Path to YAML spec file")
 
-    # dpm export spec.yaml [--append]  (alias: save)
-    p_export = sub.add_parser("export", aliases=["save"],
-                              help="Write process state to YAML (alias: save — deprecated)")
+    # dpm export spec.yaml [--append]
+    p_export = sub.add_parser("export", help="Write process state to YAML")
     p_export.add_argument("path", help="Output YAML file path")
     p_export.add_argument("--append", action="store_true",
                           help="Append to existing file instead of overwriting")
@@ -214,7 +196,7 @@ def _resolve_args(args):
             args.host = parse_at_host(args.target)
         else:
             args.host = None
-    elif cmd in ("start", "stop", "restart", "add", "remove", "create", "delete"):
+    elif cmd in ("start", "stop", "restart", "add", "remove"):
         args.name, args.host = parse_name_at_host(args.target)
     elif cmd in ("start-group", "stop-group"):
         args.group, args.host = parse_name_at_host(args.target)
@@ -240,13 +222,6 @@ def _resolve_args(args):
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
-
-    if args.command in DEPRECATED_VERBS:
-        print(
-            f"Warning: 'dpm {args.command}' is deprecated; use "
-            f"'dpm {DEPRECATED_VERBS[args.command]}' instead.",
-            file=sys.stderr,
-        )
 
     try:
         args = _resolve_args(args)
