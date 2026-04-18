@@ -6,7 +6,7 @@ import threading
 import time
 
 from PyQt5.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFontMetrics, QPalette
+from PyQt5.QtGui import QBrush, QColor, QFontMetrics
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
@@ -33,6 +34,7 @@ from dpm.spec_io import load_and_create, save_all_process_specs
 
 from .process_dialog import ProcessDialog
 from .process_output import ProcessOutput
+from .theme import DARK, DARK_MODE_DEFAULT, LIGHT, app_stylesheet, qpalette
 
 logger = logging.getLogger(__name__)
 
@@ -43,96 +45,259 @@ COLOR_YELLOW = QColor(241, 196, 15)  # Mixed / Medium usage
 COLOR_GRAY = QColor(127, 140, 141)  # Ready / Exited / No
 
 
-# Simple “card” widget for host stats
+def _fmt_rate_kbs(kbs: float) -> str:
+    if kbs >= 1024.0 * 1024.0:
+        return f"{kbs / (1024.0 * 1024.0):.1f} GB/s"
+    if kbs >= 1024.0:
+        return f"{kbs / 1024.0:.1f} MB/s"
+    return f"{kbs:.1f} KB/s"
+
+
+def _fmt_rate_short(kbs: float) -> str:
+    """Compact rate for tight spaces — no unit suffix on the value."""
+    if kbs >= 1024.0 * 1024.0:
+        return f"{kbs / (1024.0 * 1024.0):.1f}G"
+    if kbs >= 1024.0:
+        return f"{kbs / 1024.0:.1f}M"
+    return f"{kbs:.0f}K"
+
+
+# Host stats card — appearance driven by the app-wide stylesheet in theme.py
 class HostCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("HostCard")
         self.setFrameShape(QFrame.StyledPanel)
-        # Theme applied dynamically
-        self.v = QVBoxLayout(self)
-        self.v.setContentsMargins(10, 8, 10, 8)
-        self.v.setSpacing(4)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(12, 7, 12, 7)
+        v.setSpacing(3)
+
+        # Title row: hostname + colored status dot
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(6)
         self.title = QLabel("", self)
         self.title.setObjectName("HostTitle")
-        self.status = QLabel("", self)
-        self.status.setObjectName("StatLabel")
-        self.mem = QLabel("", self)
-        self.mem.setObjectName("StatLabel")
-        self.mem.setTextFormat(Qt.RichText)
-        self.cpu = QLabel("", self)
-        self.cpu.setObjectName("StatLabel")
-        self.cpu.setTextFormat(Qt.RichText)
-        self.procs_label = QLabel("", self)
-        self.procs_label.setObjectName("StatLabel")
-        self.procs_label.setTextFormat(Qt.RichText)
-        self.persist = QLabel("", self)
-        self.persist.setObjectName("StatLabel")
-        self.persist.setTextFormat(Qt.RichText)
-        self.v.addWidget(self.title)
-        self.v.addWidget(self.status)
-        self.v.addWidget(self.mem)
-        self.v.addWidget(self.cpu)
-        self.v.addWidget(self.procs_label)
-        self.v.addWidget(self.persist)
-        self.set_theme(dark=False)
+        self.status_dot = QLabel("●", self)
+        self.status_dot.setObjectName("StatusDot")
+        title_row.addWidget(self.title, 1)
+        title_row.addWidget(self.status_dot, 0)
+        v.addLayout(title_row)
 
-    def set_theme(self, dark: bool):
-        if dark:
-            self.setStyleSheet("""
-                #HostCard {
-                    border: 1px solid #444;
-                    border-radius: 4px;
-                    padding: 6px;
-                    background: #2b2b2b;
-                }
-                #HostTitle { font-weight: 600; color: #ffffff; font-size: 12px; }
-                #StatLabel { color: #dddddd; font-size: 10px; }
-            """)
-        else:
-            self.setStyleSheet("""
-                #HostCard {
-                    border: 1px solid #000;
-                    border-radius: 4px;
-                    padding: 6px;
-                    background: #ffffff;
-                }
-                #HostTitle { font-weight: 600; color: #000; font-size: 12px; }
-                #StatLabel { color: #000; font-size: 10px; }
-            """)
+        # CPU metric (label + pct on one row, bar below)
+        self.cpu_bar, self.cpu_label, self.cpu_pct = self._make_metric_row("CPU")
+        v.addLayout(self.cpu_label)
+        v.addWidget(self.cpu_bar)
+
+        # MEM metric
+        self.mem_bar, self.mem_label, self.mem_pct = self._make_metric_row("MEM")
+        v.addLayout(self.mem_label)
+        v.addWidget(self.mem_bar)
+
+        # NET row (no bar — just label + values)
+        net_row = QHBoxLayout()
+        net_row.setContentsMargins(0, 0, 0, 0)
+        net_row.setSpacing(6)
+        net_lbl = QLabel("NET")
+        net_lbl.setObjectName("StatLabel")
+        self.net_val = QLabel("↓ 0 ↑ 0")
+        self.net_val.setObjectName("StatValue")
+        self.net_val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        net_row.addWidget(net_lbl, 0)
+        net_row.addStretch(1)
+        net_row.addWidget(self.net_val, 0)
+        v.addLayout(net_row)
+
+        self.detail = QLabel("", self)
+        self.detail.setObjectName("StatLabel")
+        self.detail.setTextFormat(Qt.RichText)
+        self.detail.setWordWrap(True)
+        v.addWidget(self.detail)
+        v.addStretch(1)
+
+    @staticmethod
+    def _make_metric_row(name: str):
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        lbl = QLabel(name)
+        lbl.setObjectName("StatLabel")
+        pct = QLabel("0%")
+        pct.setObjectName("StatValue")
+        pct.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(lbl, 0)
+        row.addStretch(1)
+        row.addWidget(pct, 0)
+
+        bar = QProgressBar()
+        bar.setObjectName("HostBar")
+        bar.setRange(0, 100)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(4)
+        return bar, row, pct
 
     def set_data(
         self, host: str, online: bool, cpu_pct: int, mem_pct: int,
         running: int, total: int, persist: bool, interval: float,
+        net_recv_kbs: float, net_sent_kbs: float,
         usage_color_fn,
     ):
         self.title.setText(host)
-        self.status.setText("Online" if online else "Offline")
-        self.status.setStyleSheet(
-            f"color: {(COLOR_GREEN if online else COLOR_RED).name()}"
-        )
+        dot_color = (COLOR_GREEN if online else COLOR_RED).name()
+        self.status_dot.setStyleSheet(f"color: {dot_color}; background: transparent;")
 
-        mem_color = usage_color_fn(mem_pct).name()
         cpu_color = usage_color_fn(cpu_pct).name()
-        self.mem.setText(
-            f"Mem: <span style='color:{mem_color}'>{mem_pct}%</span>"
-        )
-        self.cpu.setText(
-            f"Cpu: <span style='color:{cpu_color}'>{cpu_pct}%</span>"
-        )
+        mem_color = usage_color_fn(mem_pct).name()
+        self.cpu_pct.setText(f"{cpu_pct}%")
+        self.cpu_pct.setStyleSheet(f"color: {cpu_color}; background: transparent;")
+        self.cpu_bar.setValue(max(0, min(100, int(cpu_pct))))
+        self.mem_pct.setText(f"{mem_pct}%")
+        self.mem_pct.setStyleSheet(f"color: {mem_color}; background: transparent;")
+        self.mem_bar.setValue(max(0, min(100, int(mem_pct))))
+
+        rx = _fmt_rate_short(net_recv_kbs)
+        tx = _fmt_rate_short(net_sent_kbs)
+        self.net_val.setText(f"↓{rx} ↑{tx}")
+
         if total > 0:
             run_color = COLOR_GREEN.name() if running > 0 else COLOR_GRAY.name()
-            self.procs_label.setText(
-                f"Procs: <span style='color:{run_color}'>{running}</span>/{total}"
+            procs_html = (
+                f"<span style='color:{run_color}'>{running}</span>/{total} procs"
             )
         else:
-            self.procs_label.setText("Procs: 0")
+            procs_html = "0 procs"
         if persist:
-            self.persist.setText(
-                f"<span style='color:{COLOR_GREEN.name()}'>Autonomous</span> | {interval:.0f}s"
+            foot = (
+                f"{procs_html} &nbsp;·&nbsp; "
+                f"<span style='color:{COLOR_GREEN.name()}'>auto</span> {interval:.0f}s"
             )
         else:
-            self.persist.setText(f"Persistence off | {interval:.0f}s")
+            foot = f"{procs_html} &nbsp;·&nbsp; {interval:.0f}s"
+        self.detail.setText(foot)
+
+
+class ResourceCard(QFrame):
+    """Single cluster-wide metric card: title, big value, progress bar, detail."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("ResourceCard")
+        self.setFrameShape(QFrame.StyledPanel)
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 8, 14, 8)
+        v.setSpacing(3)
+
+        self.title = QLabel(title, self)
+        self.title.setObjectName("ResourceTitle")
+        self.value = QLabel("—", self)
+        self.value.setObjectName("ResourceValue")
+        self.bar = QProgressBar(self)
+        self.bar.setObjectName("ResourceBar")
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(4)
+        self.bar.setVisible(False)
+        self.detail = QLabel("", self)
+        self.detail.setObjectName("ResourceDetail")
+
+        v.addWidget(self.title)
+        v.addWidget(self.value)
+        v.addWidget(self.bar)
+        v.addWidget(self.detail)
+        v.addStretch(1)
+
+    def set_value(self, value_text: str, detail_text: str = "", pct: int | None = None):
+        self.value.setText(value_text)
+        self.detail.setText(detail_text)
+        if pct is None:
+            self.bar.setVisible(False)
+        else:
+            self.bar.setVisible(True)
+            self.bar.setValue(max(0, min(100, int(pct))))
+
+
+class ClusterPanel(QWidget):
+    """2x2 grid of cluster-wide resource cards (CPU, Memory, Hosts, Processes)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(4, 2, 4, 2)
+        row.setSpacing(10)
+
+        self.cpu_card = ResourceCard("CPU USAGE")
+        self.mem_card = ResourceCard("MEMORY")
+        self.hosts_card = ResourceCard("HOSTS")
+        self.procs_card = ResourceCard("PROCESSES")
+        self.net_card = ResourceCard("NETWORK")
+
+        for card in (
+            self.cpu_card, self.mem_card, self.hosts_card,
+            self.procs_card, self.net_card,
+        ):
+            row.addWidget(card, 1)
+
+    def update_stats(self, hosts: dict, procs: dict) -> None:
+        now = time.time()
+        online_hosts = 0
+        total_cores = 0
+        busy_cores = 0.0
+        mem_total_b = 0.0
+        mem_used_b = 0.0
+        net_recv_kbs = 0.0
+        net_sent_kbs = 0.0
+
+        for info in hosts.values():
+            ts_us = getattr(info, "timestamp", 0) or 0
+            try:
+                age = now - (float(ts_us) * 1e-6)
+            except (TypeError, ValueError, OverflowError):
+                age = float("inf")
+            if age > HOST_OFFLINE_THRESHOLD_SEC:
+                continue
+            online_hosts += 1
+            cpus = int(getattr(info, "cpus", 0) or 0)
+            cpu_frac = float(getattr(info, "cpu_usage", 0.0) or 0.0)
+            total_cores += cpus
+            busy_cores += cpu_frac * cpus
+            mem_total_b += float(getattr(info, "mem_total", 0) or 0.0)
+            mem_used_b += float(getattr(info, "mem_used", 0) or 0.0)
+            net_recv_kbs += float(getattr(info, "network_recv", 0.0) or 0.0)
+            net_sent_kbs += float(getattr(info, "network_sent", 0.0) or 0.0)
+
+        total_hosts = len(hosts)
+        cpu_pct = (busy_cores / total_cores * 100.0) if total_cores else 0.0
+        mem_pct = (mem_used_b / mem_total_b * 100.0) if mem_total_b else 0.0
+        gb = 1024.0 ** 3
+        mem_used_gb = mem_used_b / gb
+        mem_total_gb = mem_total_b / gb
+
+        running = sum(1 for p in procs.values() if getattr(p, "state", "") == "R")
+        total_procs = len(procs)
+
+        self.cpu_card.set_value(
+            f"{cpu_pct:.1f}%",
+            f"{busy_cores:.1f} / {total_cores} cores busy",
+            pct=int(round(cpu_pct)),
+        )
+        self.mem_card.set_value(
+            f"{mem_pct:.1f}%",
+            f"{mem_used_gb:.1f} / {mem_total_gb:.1f} GB",
+            pct=int(round(mem_pct)),
+        )
+        self.hosts_card.set_value(
+            f"{online_hosts} / {total_hosts}",
+            "online",
+        )
+        self.procs_card.set_value(
+            f"{running} / {total_procs}",
+            "running",
+        )
+        self.net_card.set_value(
+            f"↓ {_fmt_rate_kbs(net_recv_kbs)}",
+            f"↑ {_fmt_rate_kbs(net_sent_kbs)}",
+        )
 
 
 class MainWindow(QMainWindow):
@@ -148,7 +313,7 @@ class MainWindow(QMainWindow):
 
         # Keep and reuse host cards to avoid flicker/resize jumps
         self._host_item_map = {}  # host -> (QListWidgetItem, HostCard)
-        self.dark_mode = False
+        self.dark_mode = DARK_MODE_DEFAULT
         self.setWindowTitle("DPM - Process Manager")
         self.setGeometry(100, 100, 900, 600)
 
@@ -160,18 +325,6 @@ class MainWindow(QMainWindow):
         # Create a menu bar
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-
-        # Black mode toggle
-        self.black_action = QAction("&Black Mode", self, checkable=True)
-        self.black_action.toggled.connect(self.toggle_black_mode)
-        file_menu.addAction(self.black_action)
-        file_menu.addSeparator()
-
-        # Quit
-        quit_action = QAction("&Quit", self)
-        quit_action.setShortcut("Ctrl+Q")
-        quit_action.triggered.connect(lambda: QApplication.instance().quit())
-        file_menu.addAction(quit_action)
 
         # Save
         save_action = QAction("&Save As...", self)
@@ -194,6 +347,36 @@ class MainWindow(QMainWindow):
         shutdown_action = QAction("Shut&down...", self)
         shutdown_action.triggered.connect(self._shutdown_file)
         file_menu.addAction(shutdown_action)
+
+        file_menu.addSeparator()
+
+        # Quit
+        quit_action = QAction("&Quit", self)
+        quit_action.setShortcut("Ctrl+Q")
+        quit_action.triggered.connect(lambda: QApplication.instance().quit())
+        file_menu.addAction(quit_action)
+
+        view_menu = menu_bar.addMenu("&View")
+        self.show_cluster_action = QAction("Show &Cluster", self, checkable=True)
+        self.show_cluster_action.setChecked(True)
+        self.show_cluster_action.toggled.connect(self._update_panel_visibility)
+        view_menu.addAction(self.show_cluster_action)
+
+        self.show_hosts_action = QAction("Show &Hosts", self, checkable=True)
+        self.show_hosts_action.setChecked(True)
+        self.show_hosts_action.toggled.connect(self._update_panel_visibility)
+        view_menu.addAction(self.show_hosts_action)
+
+        self.show_processes_action = QAction("Show &Processes", self, checkable=True)
+        self.show_processes_action.setChecked(True)
+        self.show_processes_action.toggled.connect(self._update_panel_visibility)
+        view_menu.addAction(self.show_processes_action)
+
+        view_menu.addSeparator()
+        self.dark_mode_action = QAction("&Dark Mode", self, checkable=True)
+        self.dark_mode_action.setChecked(self.dark_mode)
+        self.dark_mode_action.toggled.connect(self.toggle_dark_mode)
+        view_menu.addAction(self.dark_mode_action)
 
         settings_menu = menu_bar.addMenu("&Settings")
         lcm_url_action = QAction("Change &LCM URL...", self)
@@ -222,43 +405,66 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
 
         splitter = QSplitter(Qt.Vertical)
         layout.addWidget(splitter)
 
-        # --- Hosts panel ---
-        hosts_panel = QWidget()
-        hosts_layout = QVBoxLayout(hosts_panel)
-        hosts_layout.setContentsMargins(0, 0, 0, 0)
-        hosts_layout.setSpacing(2)
+        # --- Cluster resources panel (full width row) ---
+        self.cluster_side = QWidget()
+        cluster_side = self.cluster_side
+        cluster_layout = QVBoxLayout(cluster_side)
+        cluster_layout.setContentsMargins(4, 0, 4, 4)
+        cluster_layout.setSpacing(4)
+        self.cluster_label = QLabel("Cluster")
+        self.cluster_label.setObjectName("SectionHeader")
+        cluster_layout.addWidget(self.cluster_label)
+        self.cluster_panel = ClusterPanel()
+        cluster_layout.addWidget(self.cluster_panel)
+
+        # Hosts (right)
+        self.hosts_side = QWidget()
+        hosts_side = self.hosts_side
+        hosts_layout = QVBoxLayout(hosts_side)
+        hosts_layout.setContentsMargins(4, 0, 4, 4)
+        hosts_layout.setSpacing(4)
         self.hosts_label = QLabel("Hosts")
+        self.hosts_label.setObjectName("SectionHeader")
         hosts_layout.addWidget(self.hosts_label)
 
         self.hosts_list = QListWidget()
+        self.hosts_list.setObjectName("HostsList")
         self.hosts_list.setViewMode(self.hosts_list.IconMode)
         self.hosts_list.setResizeMode(self.hosts_list.Adjust)
         self.hosts_list.setMovement(self.hosts_list.Static)
-        self.hosts_list.setSpacing(8)
+        self.hosts_list.setSpacing(10)
         self.hosts_list.setWordWrap(True)
-        self.hosts_list.setStyleSheet("QListWidget { padding: 4px; }")
+        self.hosts_list.setViewportMargins(2, 2, 2, 2)
         # Right-click context menu on host cards
         self.hosts_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.hosts_list.customContextMenuRequested.connect(
             self._show_host_context_menu
         )
 
-        self._host_card_size = QSize(96, 126)
+        self._host_card_size = QSize(190, 140)
         self.hosts_list.setGridSize(self._host_card_size)
+        # Ensure at least one full row of cards fits without scrolling:
+        # card height + spacing (both sides) + viewport margins + list borders.
+        self.hosts_list.setMinimumHeight(self._host_card_size.height() + 26)
         hosts_layout.addWidget(self.hosts_list)
-        splitter.addWidget(hosts_panel)
+
+        splitter.addWidget(cluster_side)
+        splitter.addWidget(hosts_side)
 
         # --- Processes panel ---
-        proc_panel = QWidget()
+        self.proc_panel = QWidget()
+        proc_panel = self.proc_panel
         proc_layout = QVBoxLayout(proc_panel)
-        proc_layout.setContentsMargins(0, 0, 0, 0)
-        proc_layout.setSpacing(2)
+        proc_layout.setContentsMargins(4, 4, 4, 4)
+        proc_layout.setSpacing(4)
         self.processes_label = QLabel("Processes")
+        self.processes_label.setObjectName("SectionHeader")
         proc_layout.addWidget(self.processes_label)
 
         # Tree table: Group/Proc, Host, Status, CPU, MEM, Auto, Iso, Priority
@@ -284,9 +490,11 @@ class MainWindow(QMainWindow):
         proc_layout.addWidget(self.processes_tree)
         splitter.addWidget(proc_panel)
 
-        # Give most space to the process panel
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        # Give most space to the process panel; cluster/hosts rows stay compact.
+        splitter.setStretchFactor(0, 0)  # cluster
+        splitter.setStretchFactor(1, 0)  # hosts
+        splitter.setStretchFactor(2, 1)  # processes
+        splitter.setSizes([100, 190, 470])
 
         # Double-click to edit (process rows only)
         self.processes_tree.itemDoubleClicked.connect(
@@ -296,6 +504,7 @@ class MainWindow(QMainWindow):
         # initial population
         self.load_hosts()
         self.refresh_processes_in_place()
+        self.cluster_panel.update_stats(self.supervisor.hosts, self.supervisor.procs)
 
         # widen window to show all columns
         self._ensure_min_width()
@@ -330,44 +539,20 @@ class MainWindow(QMainWindow):
         if self.width() < desired:
             self.resize(desired, self.height())
 
-    def toggle_black_mode(self, enabled: bool):
+    def toggle_dark_mode(self, enabled: bool):
         self.dark_mode = enabled
         self.apply_theme()
 
+    def _update_panel_visibility(self, _=None):
+        self.cluster_side.setVisible(self.show_cluster_action.isChecked())
+        self.hosts_side.setVisible(self.show_hosts_action.isChecked())
+        self.proc_panel.setVisible(self.show_processes_action.isChecked())
+
     def apply_theme(self):
         app = QApplication.instance()
-        if self.dark_mode:
-            # Dark palette
-            pal = QPalette()
-            pal.setColor(QPalette.Window, QColor("#1e1e1e"))
-            pal.setColor(QPalette.WindowText, QColor("#e0e0e0"))
-            pal.setColor(QPalette.Base, QColor("#1e1e1e"))
-            pal.setColor(QPalette.AlternateBase, QColor("#252525"))
-            pal.setColor(QPalette.ToolTipBase, QColor("#1e1e1e"))
-            pal.setColor(QPalette.ToolTipText, QColor("#e0e0e0"))
-            pal.setColor(QPalette.Text, QColor("#e0e0e0"))
-            pal.setColor(QPalette.Button, QColor("#2a2a2a"))
-            pal.setColor(QPalette.ButtonText, QColor("#e0e0e0"))
-            pal.setColor(QPalette.BrightText, QColor("#ff5555"))
-            pal.setColor(QPalette.Link, QColor("#4aa3ff"))
-            pal.setColor(QPalette.Highlight, QColor("#264f78"))
-            pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
-            app.setPalette(pal)
-            # Widgets specific
-            self.processes_tree.setStyleSheet(
-                "QTreeWidget { background:#1e1e1e; color:#e0e0e0; }"
-            )
-            self.hosts_list.setStyleSheet("QListWidget { background:#1e1e1e; }")
-            # Update existing cards
-            for _, card in self._host_item_map.values():
-                card.set_theme(True)
-        else:
-            # Reset to default/light palette
-            app.setPalette(QPalette())
-            self.processes_tree.setStyleSheet("")
-            self.hosts_list.setStyleSheet("")
-            for _, card in self._host_item_map.values():
-                card.set_theme(False)
+        p = DARK if self.dark_mode else LIGHT
+        app.setPalette(qpalette(p))
+        app.setStyleSheet(app_stylesheet(p))
 
     def save_all_processes(self):
         default_path = os.path.join("saved", "processes.yml")
@@ -462,6 +647,8 @@ class MainWindow(QMainWindow):
 
             cpu_pct = max(0, min(100, int(round(cpu_frac * 100))))
             mem_pct = max(0, min(100, int(round(mem_frac * 100))))
+            net_recv = 0.0 if offline else float(getattr(info, "network_recv", 0.0) or 0.0)
+            net_sent = 0.0 if offline else float(getattr(info, "network_sent", 0.0) or 0.0)
 
             seen_hosts.add(host)
             tup = self._host_item_map.get(host)
@@ -499,6 +686,8 @@ class MainWindow(QMainWindow):
                 total=total,
                 persist=persist,
                 interval=interval,
+                net_recv_kbs=net_recv,
+                net_sent_kbs=net_sent,
                 usage_color_fn=self._usage_color,
             )
 
@@ -524,7 +713,7 @@ class MainWindow(QMainWindow):
 
         # Compute padding: layout (10+10) + frame padding (8+8) + borders (1+1) + small fudge
         padding = 10 + 10 + 8 + 8 + 1 + 1 + 8  # = 46 px
-        new_w = max(160, longest + padding)  # enforce a sensible minimum
+        new_w = max(180, longest + padding)  # enforce a sensible minimum
 
         # Keep the existing height; derive from any card sizeHint if you prefer dynamic
         new_size = QSize(new_w, self._host_card_size.height())
@@ -708,6 +897,7 @@ class MainWindow(QMainWindow):
         # refresh
         self.load_hosts()
         self.refresh_processes_in_place()
+        self.cluster_panel.update_stats(self.supervisor.hosts, self.supervisor.procs)
 
         # restore host selection
         if sel_host:
