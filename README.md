@@ -101,6 +101,16 @@ pip install -e ".[gui]"
 DPM_CONFIG=./dpm.yaml dpm-gui
 ```
 
+## Migration (pre-1.0 renames)
+
+If you are upgrading from an earlier checkout, note the following one-time
+renames (no compatibility shims are provided):
+
+- Binary: `dpm-agent` → `dpmd`.
+- Systemd unit: `dpm-agent.service` → `dpmd.service`.
+- Python class: `Supervisor` → `Client` (`from dpm import Client`).
+- CLI verbs: `create` → `add`, `delete` → `remove`, `save` → `export`, `load` → `import`.
+
 ## Documentation
 
 - [CLI reference](docs/cli.md) — every `dpm` subcommand
