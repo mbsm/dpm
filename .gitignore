@@ -58,3 +58,6 @@ debian/python3-dpm/
 # (uncomment below to ignore generated LCM bindings if you prefer)
 # src/dpm_msgs/
 .claude/worktrees/
+
+# Local planning/scratch docs
+docs/superpowers/
