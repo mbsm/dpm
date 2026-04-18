@@ -44,6 +44,16 @@ PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpmd
 PYTHONPATH=src DPM_CONFIG=./dpm.yaml python -m dpm.gui.main
 ```
 
+## Migration (pre-1.0 naming changes)
+
+If you're upgrading from an earlier checkout:
+
+- Binary `dpm-agent` renamed to `dpmd` (`python -m dpmd` also works).
+- Python class `Supervisor` renamed to `Client`: `from dpm import Client`.
+- Systemd unit `dpm-agent.service` renamed to `dpmd.service`.
+- CLI verbs renamed (old verbs still work but emit a deprecation warning):
+  `create`→`add`, `delete`→`remove`, `save`→`export`, `load`→`import`.
+
 ## Documentation
 
 - [CLI reference](docs/cli.md) — all `dpm` subcommands

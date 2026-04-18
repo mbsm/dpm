@@ -1,4 +1,4 @@
-"""Shared constants for the DPM agent, client, CLI, and GUI."""
+"""Shared constants for the DPM daemon, client, CLI, and GUI."""
 
 # Process state codes — single source of truth for the lifecycle.
 #
