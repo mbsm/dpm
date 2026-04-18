@@ -16,11 +16,11 @@ def config_path():
 
 @pytest.fixture
 def agent(config_path):
-    """Agent with mocked LCM — safe for unit tests (no network)."""
-    with patch("dpm.agent.agent.lcm.LCM") as MockLCM:
+    """Daemon with mocked LCM — safe for unit tests (no network)."""
+    with patch("dpmd.daemon.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        from dpm.agent.agent import Agent
-        a = Agent(config_file=config_path)
+        from dpmd.daemon import Daemon
+        a = Daemon(config_file=config_path)
         yield a
 
 

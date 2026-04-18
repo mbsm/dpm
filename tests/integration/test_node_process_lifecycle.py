@@ -1,20 +1,20 @@
-"""Integration tests: real subprocesses managed by a real Agent."""
+"""Integration tests: real subprocesses managed by a real Daemon."""
 
 import time
 
 import psutil
 import pytest
 
-from dpm.agent.agent import STATE_KILLED, STATE_READY, STATE_RUNNING
+from dpmd.daemon import STATE_KILLED, STATE_READY, STATE_RUNNING
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(scope="module")
 def real_agent(config_path):
-    """Agent backed by real LCM — one instance for all integration tests."""
-    from dpm.agent.agent import Agent
-    agent = Agent(config_file=config_path)
+    """Daemon backed by real LCM — one instance for all integration tests."""
+    from dpmd.daemon import Daemon
+    agent = Daemon(config_file=config_path)
     yield agent
     # Cleanup: stop any processes left running
     for name in list(agent.processes.keys()):

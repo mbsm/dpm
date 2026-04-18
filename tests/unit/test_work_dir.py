@@ -25,7 +25,7 @@ def test_start_with_valid_work_dir(agent, tmp_path):
     agent.create_process("test", "echo hi", False, False, "grp",
                          work_dir=work_dir)
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen:
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.pid = 123
         mock_proc.poll.return_value = None
@@ -48,7 +48,7 @@ def test_start_with_invalid_work_dir(agent):
 def test_start_without_work_dir_no_cwd(agent):
     agent.create_process("test", "echo hi", False, False, "grp")
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen:
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.pid = 123
         mock_proc.poll.return_value = None

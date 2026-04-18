@@ -1,4 +1,4 @@
-"""Tests for Agent config loading and validation."""
+"""Tests for Daemon config loading and validation."""
 
 from unittest.mock import patch
 
@@ -31,9 +31,9 @@ def valid_config_file(tmp_path):
 
 
 def _make_agent(path):
-    with patch("dpm.agent.agent.lcm.LCM"):
-        from dpm.agent.agent import Agent
-        return Agent(config_file=path)
+    with patch("dpmd.daemon.lcm.LCM"):
+        from dpmd.daemon import Daemon
+        return Daemon(config_file=path)
 
 
 # ---------------------------------------------------------------------------

@@ -10,10 +10,10 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "dpm.yaml"
 
 @pytest.fixture
 def agent_with_max_restarts(config_path):
-    """Agent with max_restarts=3 and mocked LCM."""
-    with patch("dpm.agent.agent.lcm.LCM") as MockLCM:
+    """Daemon with max_restarts=3 and mocked LCM."""
+    with patch("dpmd.daemon.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        with patch("dpm.agent.agent.Agent.load_config") as mock_config:
+        with patch("dpmd.daemon.Daemon.load_config") as mock_config:
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
@@ -28,8 +28,8 @@ def agent_with_max_restarts(config_path):
                 "max_restarts": 3,
                 "stop_signal": "SIGINT",
             }
-            from dpm.agent.agent import Agent
-            a = Agent(config_file=str(CONFIG_PATH))
+            from dpmd.daemon import Daemon
+            a = Daemon(config_file=str(CONFIG_PATH))
             yield a
 
 
@@ -96,7 +96,7 @@ def test_manual_start_clears_suspended(agent_with_max_restarts):
     agent.processes["test"].restart_count = 10
     agent.processes["test"].last_restart_time = 99999.0
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen:
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen:
         mock_proc = MagicMock()
         mock_proc.pid = 12345
         mock_proc.poll.return_value = None

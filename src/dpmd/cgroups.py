@@ -1,4 +1,4 @@
-"""Cgroups v2 management for DPM agent process isolation.
+"""Cgroups v2 management for DPM daemon process isolation.
 
 Provides per-process cgroups with:
   - CPU affinity via cpuset.cpus
@@ -9,7 +9,7 @@ Provides per-process cgroups with:
 Full kernel-level CPU partition isolation (cpuset.cpus.partition=isolated)
 requires system-level configuration — either the `isolcpus` kernel parameter
 or root-level cgroup partition setup.  When partition isolation is not
-available, the agent falls back to cpuset affinity, which combined with
+available, the daemon falls back to cpuset affinity, which combined with
 realtime scheduling provides low-preemption execution in practice.
 """
 
@@ -22,7 +22,7 @@ _CPU_PERIOD = 100_000
 # Track which cores are currently reserved by isolated processes.
 _isolated_cores: dict[str, set[int]] = {}  # proc_name -> set of core IDs
 
-# Resolved at first use — the agent's own cgroup directory (delegated by systemd).
+# Resolved at first use — the daemon's own cgroup directory (delegated by systemd).
 CGROUP_BASE: str = ""
 
 
@@ -31,17 +31,17 @@ def _enable_subtree_controllers(base: str) -> bool:
 
     The kernel requires that no processes sit directly in a cgroup before
     controllers can be enabled on it.  We move the current process (the
-    agent) into a leaf child 'agent' first, then write to subtree_control.
+    daemon) into a leaf child 'daemon' first, then write to subtree_control.
 
     Returns True if controllers were enabled successfully, False otherwise.
     """
-    agent_leaf = os.path.join(base, "agent")
+    daemon_leaf = os.path.join(base, "daemon")
     try:
-        os.makedirs(agent_leaf, exist_ok=True)
-        with open(os.path.join(agent_leaf, "cgroup.procs"), "w") as f:
+        os.makedirs(daemon_leaf, exist_ok=True)
+        with open(os.path.join(daemon_leaf, "cgroup.procs"), "w") as f:
             f.write(str(os.getpid()))
     except OSError as e:
-        logging.warning("Failed to move agent PID to leaf cgroup: %s", e)
+        logging.warning("Failed to move daemon PID to leaf cgroup: %s", e)
         return False
 
     ctrl_path = os.path.join(base, "cgroup.subtree_control")
@@ -56,9 +56,9 @@ def _enable_subtree_controllers(base: str) -> bool:
 
 
 def _resolve_cgroup_base() -> str:
-    """Detect the agent's cgroup directory from /proc/self/cgroup.
+    """Detect the daemon's cgroup directory from /proc/self/cgroup.
 
-    With systemd Delegate=yes, the agent owns its cgroup subtree and can
+    With systemd Delegate=yes, the daemon owns its cgroup subtree and can
     create child cgroups there.  Falls back to /sys/fs/cgroup/dpm for
     standalone (non-systemd) execution.
     """
@@ -199,18 +199,18 @@ def cleanup_cgroup(name: str) -> None:
     if not os.path.isdir(cgroup_dir):
         return
     try:
-        # Move any remaining PIDs to the agent leaf before removing
+        # Move any remaining PIDs to the daemon leaf before removing
         procs_file = os.path.join(cgroup_dir, "cgroup.procs")
-        agent_procs = os.path.join(CGROUP_BASE, "agent", "cgroup.procs")
-        if not os.path.exists(agent_procs):
-            agent_procs = os.path.join(CGROUP_BASE, "cgroup.procs")
+        daemon_procs = os.path.join(CGROUP_BASE, "daemon", "cgroup.procs")
+        if not os.path.exists(daemon_procs):
+            daemon_procs = os.path.join(CGROUP_BASE, "cgroup.procs")
         try:
             with open(procs_file, "r") as f:
                 pids = f.read().strip().split()
             for pid in pids:
                 if pid:
                     try:
-                        _write(os.path.dirname(agent_procs), "cgroup.procs", pid)
+                        _write(os.path.dirname(daemon_procs), "cgroup.procs", pid)
                     except OSError:
                         pass
         except OSError:

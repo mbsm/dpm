@@ -23,7 +23,7 @@ gui = ["PyQt5>=5.15"]
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-dpm-agent = "dpm.agent.agent:main"
+dpmd = "dpmd.__main__:main"
 dpm = "dpm.cli.cli:main"
 
 [project.gui-scripts]

@@ -10,9 +10,9 @@ def test_start_process_calls_setup_cgroup(agent):
     agent.create_process("test", "echo hi", False, False, "grp",
                          cpuset="0,1", cpu_limit=1.5, mem_limit=1073741824)
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen, \
-         patch("dpm.agent.agent.cgroups_available", return_value=True), \
-         patch("dpm.agent.agent.setup_cgroup") as mock_setup:
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen, \
+         patch("dpmd.daemon.cgroups_available", return_value=True), \
+         patch("dpmd.daemon.setup_cgroup") as mock_setup:
         mock_proc = MagicMock()
         mock_proc.pid = 123
         mock_proc.poll.return_value = None
@@ -29,8 +29,8 @@ def test_start_process_skips_cgroup_when_no_limits(agent):
     """start_process doesn't call setup_cgroup when no limits are set."""
     agent.create_process("test", "echo hi", False, False, "grp")
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen, \
-         patch("dpm.agent.agent.setup_cgroup") as mock_setup:
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen, \
+         patch("dpmd.daemon.setup_cgroup") as mock_setup:
         mock_proc = MagicMock()
         mock_proc.pid = 123
         mock_proc.poll.return_value = None
@@ -47,9 +47,9 @@ def test_start_process_continues_on_cgroup_failure(agent):
     agent.create_process("test", "echo hi", False, False, "grp",
                          cpuset="0,1")
 
-    with patch("dpm.agent.agent.psutil.Popen") as mock_popen, \
-         patch("dpm.agent.agent.cgroups_available", return_value=True), \
-         patch("dpm.agent.agent.setup_cgroup", side_effect=OSError("permission denied")):
+    with patch("dpmd.daemon.psutil.Popen") as mock_popen, \
+         patch("dpmd.daemon.cgroups_available", return_value=True), \
+         patch("dpmd.daemon.setup_cgroup", side_effect=OSError("permission denied")):
         mock_proc = MagicMock()
         mock_proc.pid = 123
         mock_proc.poll.return_value = None
@@ -72,7 +72,7 @@ def test_stop_process_calls_cleanup_cgroup(agent):
     agent.processes["test"].proc = mock_proc
     agent.processes["test"].state = "R"
 
-    with patch("dpm.agent.agent.cleanup_cgroup") as mock_cleanup, \
+    with patch("dpmd.daemon.cleanup_cgroup") as mock_cleanup, \
          patch.object(agent, "_kill_process_group", return_value=True):
         agent.stop_process("test")
         mock_cleanup.assert_called_once_with("test")

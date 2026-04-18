@@ -11,10 +11,10 @@ CONFIG_PATH = Path(__file__).parent.parent.parent / "dpm.yaml"
 
 @pytest.fixture
 def agent_with_sigint():
-    """Agent configured with stop_signal=SIGINT."""
-    with patch("dpm.agent.agent.lcm.LCM") as MockLCM:
+    """Daemon configured with stop_signal=SIGINT."""
+    with patch("dpmd.daemon.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        with patch("dpm.agent.agent.Agent.load_config") as mock_config:
+        with patch("dpmd.daemon.Daemon.load_config") as mock_config:
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
@@ -29,8 +29,8 @@ def agent_with_sigint():
                 "max_restarts": -1,
                 "stop_signal": "SIGINT",
             }
-            from dpm.agent.agent import Agent
-            a = Agent(config_file=str(CONFIG_PATH))
+            from dpmd.daemon import Daemon
+            a = Daemon(config_file=str(CONFIG_PATH))
             yield a
 
 
@@ -62,9 +62,9 @@ def test_stop_signal_defaults_to_sigint(agent):
 
 def test_invalid_stop_signal_falls_back():
     """Invalid signal name falls back to SIGINT."""
-    with patch("dpm.agent.agent.lcm.LCM") as MockLCM:
+    with patch("dpmd.daemon.lcm.LCM") as MockLCM:
         MockLCM.return_value = MagicMock()
-        with patch("dpm.agent.agent.Agent.load_config") as mock_config:
+        with patch("dpmd.daemon.Daemon.load_config") as mock_config:
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
@@ -79,6 +79,6 @@ def test_invalid_stop_signal_falls_back():
                 "max_restarts": -1,
                 "stop_signal": "SIGFAKE",
             }
-            from dpm.agent.agent import Agent
-            a = Agent(config_file=str(CONFIG_PATH))
+            from dpmd.daemon import Daemon
+            a = Daemon(config_file=str(CONFIG_PATH))
             assert a.stop_signal == signal.SIGINT

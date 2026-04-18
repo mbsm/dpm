@@ -1,8 +1,8 @@
-"""Tests for Agent process lifecycle state machine (no real subprocesses)."""
+"""Tests for Daemon process lifecycle state machine (no real subprocesses)."""
 
 import pytest
 
-from dpm.agent.agent import STATE_FAILED, STATE_KILLED, STATE_READY, STATE_RUNNING
+from dpmd.daemon import STATE_FAILED, STATE_KILLED, STATE_READY, STATE_RUNNING
 
 
 # ---------------------------------------------------------------------------

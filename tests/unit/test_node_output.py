@@ -1,11 +1,11 @@
-"""Tests for Agent output buffering, chunking, and thread-safe stream reading."""
+"""Tests for Daemon output buffering, chunking, and thread-safe stream reading."""
 
 import io
 import threading
 
 import pytest
 
-from dpm.agent.agent import MAX_OUTPUT_CHUNK, STATE_RUNNING, stream_reader
+from dpmd.daemon import MAX_OUTPUT_CHUNK, STATE_RUNNING, stream_reader
 from dpm_msgs import proc_output_t
 
 

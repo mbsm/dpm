@@ -1,4 +1,4 @@
-"""Tests for Agent.command_handler: routing and hostname filtering."""
+"""Tests for Daemon.command_handler: routing and hostname filtering."""
 
 from unittest.mock import patch
 

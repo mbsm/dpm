@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DPM agent — runs on each host to manage and monitor local processes."""
+"""DPM daemon — runs on each host to manage and monitor local processes."""
 
 import logging
 import logging.handlers
@@ -33,11 +33,11 @@ from dpm.constants import (
 # from producing LCM messages too large to fragment reliably over UDP.
 MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
 
-# Maximum bytes buffered per process on the agent side. Prevents unbounded
+# Maximum bytes buffered per process on the daemon side. Prevents unbounded
 # memory growth when a process produces output faster than the publish interval.
 MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches client-side cap)
 
-from dpm.agent.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup, _resolve_cgroup_base
+from dpmd.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup, _resolve_cgroup_base
 
 try:
     from dpm_msgs import (
@@ -52,9 +52,9 @@ except ModuleNotFoundError as e:
         "Failed to import 'dpm_msgs'.\n"
         "Install the project and run via the installed entry point:\n"
         "  pip install -e .\n"
-        "  dpm-agent\n"
+        "  dpmd\n"
         "Or for repo runs without install:\n"
-        "  PYTHONPATH=src python -m dpm.agent.agent\n"
+        "  PYTHONPATH=src python -m dpmd\n"
     ) from e
 
 
@@ -139,8 +139,8 @@ class ProcessEntry:
     stderr_thread: Any = None  # threading.Thread | None
 
 
-class Agent:
-    """LCM-based agent managing local processes and telemetry on a single host."""
+class Daemon:
+    """LCM-based daemon managing local processes and telemetry on a single host."""
 
     # Class-level dispatch: action -> (method_name, msg_attribute)
     _CMD_DISPATCH = {
@@ -179,10 +179,10 @@ class Agent:
         self.log_file_path = (
             self.config.get("log_file_path")
             or self.config.get("log_file")
-            or "/var/log/dpm/dpm-agent.log"
+            or "/var/log/dpm/dpmd.log"
         )
 
-        # Process persistence: when enabled, the agent saves its process
+        # Process persistence: when enabled, the daemon saves its process
         # registry to disk on every create/delete and reloads on startup.
         # Processes with auto_restart=True are started automatically on reload.
         self._persist = bool(self.config.get("persist_processes", False))
@@ -225,7 +225,7 @@ class Agent:
             self._persist,
         )
 
-        # Initialize cgroups early — moves agent PID to a leaf cgroup and
+        # Initialize cgroups early — moves daemon PID to a leaf cgroup and
         # enables controllers before any child processes are spawned.
         _resolve_cgroup_base()
 
@@ -1286,11 +1286,3 @@ class Agent:
                 logging.warning("Shutdown: failed stopping %s: %s", name, e)
 
 
-def main() -> None:
-    config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
-    agent = Agent(config_file=config_path)
-    agent.run()
-
-
-if __name__ == "__main__":
-    main()

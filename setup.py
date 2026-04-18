@@ -13,7 +13,7 @@ setup(
             'dpm-gui = dpm.gui.main:main',
         ],
         'console_scripts': [
-            'dpm-agent = dpm.agent.agent:main',
+            'dpmd = dpmd.__main__:main',
             'dpm = dpm.cli.cli:main',
         ],
     },
