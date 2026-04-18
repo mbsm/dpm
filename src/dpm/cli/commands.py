@@ -176,7 +176,7 @@ def cmd_restart(client, args) -> int:
     return 0
 
 
-def cmd_create(client, args) -> int:
+def cmd_add(client, args) -> int:
     name, host = args.name, args.host
     client.create_proc(
         name, args.cmd, args.group, host, args.auto_restart, args.realtime,
@@ -195,7 +195,7 @@ def cmd_create(client, args) -> int:
     return 0
 
 
-def cmd_delete(client, args) -> int:
+def cmd_remove(client, args) -> int:
     result = _require_proc(client, args)
     if result is None:
         return 1
@@ -224,7 +224,7 @@ def cmd_stop_group(client, args) -> int:
     return 0
 
 
-def cmd_load(client, args) -> int:
+def cmd_import(client, args) -> int:
     from dpm.spec_io import load_and_create
 
     try:
@@ -247,7 +247,7 @@ def cmd_load(client, args) -> int:
     return 1 if errors else 0
 
 
-def cmd_save(client, args) -> int:
+def cmd_export(client, args) -> int:
     from dpm.spec_io import save_all_process_specs
 
     if not wait_for_telemetry(client):

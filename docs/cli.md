@@ -14,11 +14,11 @@ dpm logs camera@jet1                    # stream output (Ctrl+C to stop)
 ## Process control
 
 ```bash
-dpm create camera@jet1 --cmd "cam-node" -g perception --auto-restart
+dpm add camera@jet1 --cmd "cam-node" -g perception --auto-restart
 dpm start camera@jet1
 dpm stop camera@jet1
 dpm restart camera@jet1
-dpm delete camera@jet1                  # stop and remove
+dpm remove camera@jet1                  # stop and unregister
 dpm move camera@jet1 @jet2              # migrate to another host
 ```
 
@@ -34,8 +34,8 @@ dpm stop-all
 ## Spec files
 
 ```bash
-dpm save snapshot.yaml                  # export current state
-dpm load system.yaml                    # import process definitions
+dpm export snapshot.yaml                # write current state to YAML
+dpm import system.yaml                  # register processes from YAML
 ```
 
 ## Launch files
@@ -47,7 +47,7 @@ dpm shutdown startup.yaml               # reverse-order shutdown
 
 See [launch-files.md](launch-files.md) for the launch file format.
 
-## Agent configuration
+## Daemon configuration
 
 ```bash
 dpm set-interval @jet1 2                # telemetry interval (seconds)
@@ -55,3 +55,15 @@ dpm set-persistence @jet1 on            # enable process persistence
 ```
 
 Run `dpm <command> --help` for full option listings.
+
+## Deprecated verbs
+
+The following verbs still work but emit a deprecation warning and will be
+removed in a future release:
+
+| Deprecated | Use instead |
+|---|---|
+| `dpm create` | `dpm add` |
+| `dpm delete` | `dpm remove` |
+| `dpm save`   | `dpm export` |
+| `dpm load`   | `dpm import` |
