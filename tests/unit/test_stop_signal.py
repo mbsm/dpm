@@ -40,8 +40,9 @@ def test_stop_signal_parsed_from_config(agent_with_sigint):
 
 def test_stop_sends_configured_signal(agent_with_sigint):
     """stop_process sends the configured signal, not hardcoded SIGTERM."""
+    from dpmd.processes import create_process, stop_process
     agent = agent_with_sigint
-    agent.create_process("test", "sleep 999", False, False, "grp")
+    create_process(agent, "test", "sleep 999", False, False, "grp")
 
     mock_proc = MagicMock()
     mock_proc.pid = 12345
@@ -50,9 +51,9 @@ def test_stop_sends_configured_signal(agent_with_sigint):
     agent.processes["test"].proc = mock_proc
     agent.processes["test"].state = "R"
 
-    with patch.object(agent, "_kill_process_group", return_value=True) as mock_kill:
-        agent.stop_process("test")
-        mock_kill.assert_any_call(12345, signal.SIGINT)
+    with patch("dpmd.processes._kill_process_group", return_value=True) as mock_kill:
+        stop_process(agent, "test")
+        mock_kill.assert_any_call(agent, 12345, signal.SIGINT)
 
 
 def test_stop_signal_defaults_to_sigint(agent):

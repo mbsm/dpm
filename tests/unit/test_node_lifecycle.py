@@ -2,7 +2,14 @@
 
 import pytest
 
-from dpmd.daemon import STATE_FAILED, STATE_KILLED, STATE_READY, STATE_RUNNING
+from dpm.constants import STATE_FAILED, STATE_KILLED, STATE_READY, STATE_RUNNING
+from dpmd.processes import (
+    _group_matches,
+    create_process,
+    delete_process,
+    start_process,
+    stop_process,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -10,7 +17,7 @@ from dpmd.daemon import STATE_FAILED, STATE_KILLED, STATE_READY, STATE_RUNNING
 # ---------------------------------------------------------------------------
 
 def test_create_sets_initial_state(agent):
-    agent.create_process("p1", "echo hi", False, False, "grp")
+    create_process(agent, "p1", "echo hi", False, False, "grp")
     p = agent.processes["p1"]
     assert p.state == STATE_READY
     assert p.proc is None
@@ -22,7 +29,7 @@ def test_create_sets_initial_state(agent):
 
 
 def test_create_stores_metadata(agent):
-    agent.create_process("p1", "sleep 100", True, True, "mygroup")
+    create_process(agent, "p1", "sleep 100", True, True, "mygroup")
     p = agent.processes["p1"]
     assert p.exec_command == "sleep 100"
     assert p.auto_restart is True
@@ -32,7 +39,7 @@ def test_create_stores_metadata(agent):
 
 def test_create_defaults_output_fields(agent):
     """output_lock defaults to None; stdout_lines/stderr_lines default to empty lists."""
-    agent.create_process("p1", "cmd", False, False, "")
+    create_process(agent, "p1", "cmd", False, False, "")
     p = agent.processes["p1"]
     assert p.output_lock is None
     assert p.stdout_lines == []
@@ -40,8 +47,8 @@ def test_create_defaults_output_fields(agent):
 
 
 def test_create_overwrites_existing_entry(agent):
-    agent.create_process("p1", "echo a", False, False, "g1")
-    agent.create_process("p1", "echo b", True, False, "g2")
+    create_process(agent, "p1", "echo a", False, False, "g1")
+    create_process(agent, "p1", "echo b", True, False, "g2")
     p = agent.processes["p1"]
     assert p.exec_command == "echo b"
     assert p.auto_restart is True
@@ -50,13 +57,13 @@ def test_create_overwrites_existing_entry(agent):
 
 def test_create_stops_running_process_before_overwrite(agent):
     from unittest.mock import MagicMock, patch
-    agent.create_process("p1", "echo a", False, False, "g1")
+    create_process(agent, "p1", "echo a", False, False, "g1")
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None  # still running
     agent.processes["p1"].proc = fake_proc
-    with patch.object(agent, "stop_process") as mock_stop:
-        agent.create_process("p1", "echo b", False, False, "g2")
-    mock_stop.assert_called_once_with("p1")
+    with patch("dpmd.processes.stop_process") as mock_stop:
+        create_process(agent, "p1", "echo b", False, False, "g2")
+    mock_stop.assert_called_once_with(agent, "p1")
 
 
 # ---------------------------------------------------------------------------
@@ -64,19 +71,19 @@ def test_create_stops_running_process_before_overwrite(agent):
 # ---------------------------------------------------------------------------
 
 def test_start_unknown_process_no_crash(agent):
-    agent.start_process("nonexistent")  # should log warning and return cleanly
+    start_process(agent, "nonexistent")  # should log warning and return cleanly
 
 
 def test_start_already_running_process_no_crash(agent):
     """If proc.poll() returns None (still running), start should be a no-op."""
     from unittest.mock import MagicMock
-    agent.create_process("p1", "sleep 100", False, False, "")
+    create_process(agent, "p1", "sleep 100", False, False, "")
     # Plant a fake "running" proc
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None  # still running
     agent.processes["p1"].proc = fake_proc
     agent.processes["p1"].state = STATE_RUNNING
-    agent.start_process("p1")
+    start_process(agent, "p1")
     # Still the same fake proc — no re-spawn
     assert agent.processes["p1"].proc is fake_proc
 
@@ -86,13 +93,13 @@ def test_start_already_running_process_no_crash(agent):
 # ---------------------------------------------------------------------------
 
 def test_stop_unknown_process_no_crash(agent):
-    agent.stop_process("nonexistent")
+    stop_process(agent, "nonexistent")
 
 
 def test_stop_process_with_no_proc_is_noop(agent):
-    agent.create_process("p1", "cmd", False, False, "")
+    create_process(agent, "p1", "cmd", False, False, "")
     # proc is None by default → should be a no-op
-    agent.stop_process("p1")
+    stop_process(agent, "p1")
     assert agent.processes["p1"].state == STATE_READY
 
 
@@ -101,24 +108,24 @@ def test_stop_process_with_no_proc_is_noop(agent):
 # ---------------------------------------------------------------------------
 
 def test_delete_unknown_process_no_crash(agent):
-    agent.delete_process("nonexistent")
+    delete_process(agent, "nonexistent")
 
 
 def test_delete_removes_from_table(agent):
-    agent.create_process("p1", "cmd", False, False, "")
-    agent.delete_process("p1")
+    create_process(agent, "p1", "cmd", False, False, "")
+    delete_process(agent, "p1")
     assert "p1" not in agent.processes
 
 
 def test_delete_calls_stop_if_proc_running(agent):
     from unittest.mock import MagicMock, patch
-    agent.create_process("p1", "sleep 10", False, False, "")
+    create_process(agent, "p1", "sleep 10", False, False, "")
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None
     agent.processes["p1"].proc = fake_proc
-    with patch.object(agent, "stop_process") as mock_stop:
-        agent.delete_process("p1")
-    mock_stop.assert_called_once_with("p1")
+    with patch("dpmd.processes.stop_process") as mock_stop:
+        delete_process(agent, "p1")
+    mock_stop.assert_called_once_with(agent, "p1")
 
 
 # ---------------------------------------------------------------------------
@@ -138,4 +145,4 @@ def test_delete_calls_stop_if_proc_running(agent):
     ("grp", "GRP", False),       # case-sensitive for named groups
 ])
 def test_group_matches(agent, proc_group, target_group, expected):
-    assert agent._group_matches(proc_group, target_group) == expected
+    assert _group_matches(agent, proc_group, target_group) == expected

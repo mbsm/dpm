@@ -5,12 +5,15 @@ import threading
 
 import pytest
 
-from dpmd.daemon import MAX_OUTPUT_CHUNK, STATE_RUNNING, stream_reader
+from dpmd.daemon import MAX_OUTPUT_CHUNK
+from dpmd.processes import create_process, monitor_process, stream_reader
+from dpmd.telemetry import publish_procs_outputs
+from dpm.constants import STATE_RUNNING
 from dpm_msgs import proc_output_t
 
 
 def _setup_proc(agent, name="p1", stdout="", stderr=""):
-    agent.create_process(name, "cmd", False, False, "")
+    create_process(agent, name, "cmd", False, False, "")
     agent.processes[name].stdout = stdout
     agent.processes[name].stderr = stderr
     agent.lc.publish.reset_mock()
@@ -22,13 +25,13 @@ def _setup_proc(agent, name="p1", stdout="", stderr=""):
 
 def test_publishes_nothing_for_empty_buffers(agent):
     _setup_proc(agent)
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
     agent.lc.publish.assert_not_called()
 
 
 def test_publishes_small_stdout_and_clears_buffer(agent):
     _setup_proc(agent, stdout="hello", stderr="err")
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
     agent.lc.publish.assert_called_once()
     assert agent.processes["p1"].stdout == ""
     assert agent.processes["p1"].stderr == ""
@@ -37,7 +40,7 @@ def test_publishes_small_stdout_and_clears_buffer(agent):
 def test_chunks_stdout_to_max_output_chunk(agent):
     big = "x" * (MAX_OUTPUT_CHUNK * 2)
     _setup_proc(agent, stdout=big)
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
 
     _, encoded = agent.lc.publish.call_args[0]
     msg = proc_output_t.decode(encoded)
@@ -47,22 +50,22 @@ def test_chunks_stdout_to_max_output_chunk(agent):
 def test_remainder_stays_in_buffer_after_chunk(agent):
     big = "x" * (MAX_OUTPUT_CHUNK + 100)
     _setup_proc(agent, stdout=big)
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
     assert len(agent.processes["p1"].stdout) == 100
 
 
 def test_second_publish_drains_remainder(agent):
     big = "x" * (MAX_OUTPUT_CHUNK + 50)
     _setup_proc(agent, stdout=big)
-    agent.publish_procs_outputs()
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
+    publish_procs_outputs(agent)
     assert agent.processes["p1"].stdout == ""
 
 
 def test_chunks_stderr_independently(agent):
     big_err = "e" * (MAX_OUTPUT_CHUNK + 200)
     _setup_proc(agent, stderr=big_err)
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
 
     _, encoded = agent.lc.publish.call_args[0]
     msg = proc_output_t.decode(encoded)
@@ -71,10 +74,10 @@ def test_chunks_stderr_independently(agent):
 
 
 def test_published_message_carries_correct_metadata(agent):
-    agent.create_process("myproc", "cmd", False, False, "mygrp")
+    create_process(agent, "myproc", "cmd", False, False, "mygrp")
     agent.processes["myproc"].stdout = "data"
     agent.lc.publish.reset_mock()
-    agent.publish_procs_outputs()
+    publish_procs_outputs(agent)
 
     channel, encoded = agent.lc.publish.call_args[0]
     msg = proc_output_t.decode(encoded)
@@ -141,7 +144,7 @@ def test_stream_reader_skips_blank_lines():
 def test_monitor_process_drains_stdout_lines_to_buffer(agent):
     import threading
     from unittest.mock import MagicMock
-    agent.create_process("p1", "sleep 100", False, False, "")
+    create_process(agent, "p1", "sleep 100", False, False, "")
     fake_proc = MagicMock()
     fake_proc.poll.return_value = None  # still running
     agent.processes["p1"].proc = fake_proc
@@ -152,16 +155,16 @@ def test_monitor_process_drains_stdout_lines_to_buffer(agent):
     agent.processes["p1"].stdout_lines = ["line1\n", "line2\n"]
     agent.processes["p1"].stderr_lines = []
 
-    agent.monitor_process("p1")
+    monitor_process(agent, "p1")
 
     assert agent.processes["p1"].stdout == "line1\nline2\n"
     assert agent.processes["p1"].stdout_lines == []
 
 
 def test_monitor_process_skips_if_not_running(agent):
-    agent.create_process("p1", "cmd", False, False, "")
-    agent.monitor_process("p1")
+    create_process(agent, "p1", "cmd", False, False, "")
+    monitor_process(agent, "p1")
 
 
 def test_monitor_process_skips_unknown_name(agent):
-    agent.monitor_process("no_such_proc")
+    monitor_process(agent, "no_such_proc")
