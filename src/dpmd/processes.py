@@ -18,7 +18,6 @@ from typing import Any, TYPE_CHECKING
 import psutil
 
 from dpm.constants import (
-    DPM_PROTOCOL_VERSION,
     STATE_FAILED,
     STATE_KILLED,
     STATE_READY,
@@ -29,13 +28,6 @@ from dpm.constants import (
 from dpmd.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
 from dpmd.limits import MAX_OUTPUT_BUFFER
 from dpmd.proc_logs import open_process_log
-
-try:
-    from dpm_msgs import proc_output_t
-except ModuleNotFoundError as e:
-    raise ModuleNotFoundError(
-        "Failed to import 'dpm_msgs'. Install the project via 'pip install -e .'."
-    ) from e
 
 if TYPE_CHECKING:
     from dpmd.daemon import Daemon
@@ -450,27 +442,8 @@ def start_process(d: "Daemon", process_name) -> None:
         proc_info.state = STATE_FAILED
         proc_info.errors = str(e)
         proc_info.proc = None
-
-        # Publish startup error to proc_outputs so GUI can show it
-        try:
-            msg = proc_output_t()
-            msg.protocol_version = DPM_PROTOCOL_VERSION
-            msg.timestamp = int(time.time() * 1e6)
-            msg.name = process_name
-            msg.hostname = d.hostname
-            msg.group = proc_info.group
-            msg.stdout = ""
-            msg.stderr = error_msg
-            d.lc.publish(d.proc_outputs_channel, msg.encode())
-            logging.debug(
-                "Start Process: Published startup error output for %s", process_name
-            )
-        except OSError as pub_e:
-            logging.error(
-                "Start Process: Failed to publish startup error for %s: %s",
-                process_name,
-                pub_e,
-            )
+        if proc_info.log_file is not None:
+            proc_info.log_file.write_marker(f"start failed: {error_msg}")
 
 
 def stop_process(d: "Daemon", process_name) -> None:
@@ -691,24 +664,10 @@ def monitor_process(d: "Daemon", process_name) -> None:
 
         if stdout_content or stderr_content:
             proc_info.errors = stdout_content + stderr_content
-
-            # Publish the captured output to LCM immediately
-            try:
-                msg = proc_output_t()
-                msg.protocol_version = DPM_PROTOCOL_VERSION
-                msg.timestamp = int(time.time() * 1e6)
-                msg.name = process_name
-                msg.hostname = d.hostname
-                msg.group = proc_info.group
-                msg.stdout = stdout_content
-                msg.stderr = stderr_content
-                d.lc.publish(d.proc_outputs_channel, msg.encode())
-            except OSError as pub_e:
-                logging.error(
-                    "Monitor Process: Failed to publish output for %s: %s",
-                    process_name,
-                    pub_e,
-                )
+            # Final output is on disk via the per-line writer. The next
+            # log-publish cycle (if a client has subscribed) will drain
+            # whatever's still in the ring buffer; if nobody's watching,
+            # the on-disk file is the source of truth.
         elif exit_code != 0:
             proc_info.errors = f"Process exited with code {exit_code}."
 

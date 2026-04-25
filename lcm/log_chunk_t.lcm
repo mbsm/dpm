@@ -1,0 +1,38 @@
+package dpm_msgs;
+
+// Response to a "read_log" request, or an unsolicited live publish from
+// a daemon for a process the client is currently subscribed to.
+//
+// The request_seq field echoes command_t.seq so the requester can match
+// chunks to the request that triggered them, and ignore stale chunks
+// from earlier requests.
+struct log_chunk_t
+{
+    // DPM wire-protocol version — consumers drop messages with a mismatching
+    // version. See dpm.constants.DPM_PROTOCOL_VERSION.
+    int32_t protocol_version;
+
+    // Echo of command_t.seq for read_log responses; 0 for unsolicited
+    // live publishes triggered by an active subscription.
+    int64_t request_seq;
+
+    // Wall-clock at the daemon when this chunk was emitted, µs since epoch.
+    int64_t timestamp;
+
+    // Source process and host.
+    string hostname;
+    string name;
+
+    // Ordering within a single request_seq response stream. Live publishes
+    // (request_seq=0) reuse the daemon's per-process chunk counter.
+    int32_t chunk_index;
+
+    // True on the final chunk of a read_log response. Always false for
+    // live-subscription publishes (which have no end).
+    boolean last;
+
+    // Raw log content. For read_log this is text from the on-disk file;
+    // for live publishes this is the same content the old proc_output_t
+    // carried. Capped at MAX_OUTPUT_CHUNK (64 KB) per message.
+    string content;
+}

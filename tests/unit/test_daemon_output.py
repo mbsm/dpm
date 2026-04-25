@@ -9,24 +9,43 @@ from dpmd.daemon import MAX_OUTPUT_BUFFER, MAX_OUTPUT_CHUNK
 from dpmd.processes import _OutBuf, create_process, monitor_process, stream_reader
 from dpmd.telemetry import publish_procs_outputs
 from dpm.constants import STATE_RUNNING
-from dpm_msgs import proc_output_t
+from dpm_msgs import log_chunk_t
 
 
-def _setup_proc(agent, name="p1", stdout="", stderr=""):
+def _setup_proc(agent, name="p1", stdout="", stderr="", subscribe=True):
     create_process(agent, name, "cmd", False, False, "")
     agent.processes[name].stdout = stdout
     agent.processes[name].stderr = stderr
+    if subscribe:
+        # Long-lived subscription so the publish path is not gated out.
+        agent.output_subscriptions[name] = float("inf")
     agent.lc.publish.reset_mock()
 
 
 # ---------------------------------------------------------------------------
-# publish_procs_outputs — chunking
+# publish_procs_outputs — gating by subscription + chunking
 # ---------------------------------------------------------------------------
 
 def test_publishes_nothing_for_empty_buffers(agent):
     _setup_proc(agent)
     publish_procs_outputs(agent)
     agent.lc.publish.assert_not_called()
+
+
+def test_publishes_nothing_without_subscription(agent):
+    """Silent-by-default: no subscription -> no wire publish even with content."""
+    _setup_proc(agent, stdout="hello", subscribe=False)
+    publish_procs_outputs(agent)
+    agent.lc.publish.assert_not_called()
+
+
+def test_drains_buffers_when_no_subscribers(agent):
+    """Without a subscriber the daemon still drains rings so they don't grow."""
+    _setup_proc(agent, stdout="x" * 100, stderr="y" * 100, subscribe=False)
+    publish_procs_outputs(agent)
+    # Buffers were drained even though nothing was published.
+    assert len(agent.processes["p1"].stdout) == 0
+    assert len(agent.processes["p1"].stderr) == 0
 
 
 def test_publishes_small_stdout_and_clears_buffer(agent):
@@ -37,14 +56,15 @@ def test_publishes_small_stdout_and_clears_buffer(agent):
     assert agent.processes["p1"].stderr == ""
 
 
-def test_chunks_stdout_to_max_output_chunk(agent):
+def test_chunks_total_to_max_output_chunk(agent):
+    """stdout + stderr together cap at MAX_OUTPUT_CHUNK per publish cycle."""
     big = "x" * (MAX_OUTPUT_CHUNK * 2)
     _setup_proc(agent, stdout=big)
     publish_procs_outputs(agent)
 
     _, encoded = agent.lc.publish.call_args[0]
-    msg = proc_output_t.decode(encoded)
-    assert len(msg.stdout) == MAX_OUTPUT_CHUNK
+    msg = log_chunk_t.decode(encoded)
+    assert len(msg.content) == MAX_OUTPUT_CHUNK
 
 
 def test_remainder_stays_in_buffer_after_chunk(agent):
@@ -62,29 +82,31 @@ def test_second_publish_drains_remainder(agent):
     assert agent.processes["p1"].stdout == ""
 
 
-def test_chunks_stderr_independently(agent):
-    big_err = "e" * (MAX_OUTPUT_CHUNK + 200)
-    _setup_proc(agent, stderr=big_err)
-    publish_procs_outputs(agent)
-
-    _, encoded = agent.lc.publish.call_args[0]
-    msg = proc_output_t.decode(encoded)
-    assert len(msg.stderr) == MAX_OUTPUT_CHUNK
-    assert len(agent.processes["p1"].stderr) == 200
-
-
 def test_published_message_carries_correct_metadata(agent):
     create_process(agent, "myproc", "cmd", False, False, "mygrp")
     agent.processes["myproc"].stdout = "data"
+    agent.output_subscriptions["myproc"] = float("inf")
     agent.lc.publish.reset_mock()
     publish_procs_outputs(agent)
 
-    channel, encoded = agent.lc.publish.call_args[0]
-    msg = proc_output_t.decode(encoded)
+    _channel, encoded = agent.lc.publish.call_args[0]
+    msg = log_chunk_t.decode(encoded)
     assert msg.name == "myproc"
     assert msg.hostname == agent.hostname
-    assert msg.group == "mygrp"
-    assert msg.stdout == "data"
+    assert msg.content == "data"
+    assert msg.request_seq == 0  # unsolicited live publish
+    assert msg.last is False     # live publishes are never "last"
+
+
+def test_expired_subscription_blocks_publish(agent):
+    """A subscription whose deadline has passed must not trigger publishes."""
+    import time
+    _setup_proc(agent, stdout="hello", subscribe=False)
+    agent.output_subscriptions["p1"] = time.monotonic() - 1.0
+    publish_procs_outputs(agent)
+    agent.lc.publish.assert_not_called()
+    # And the expired entry was reaped on the way through.
+    assert "p1" not in agent.output_subscriptions
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +157,21 @@ def test_stream_reader_skips_blank_lines():
     output_list = []
     stream_reader(io.StringIO("line1\n\nline2\n"), output_list, lock)
     assert len(output_list) == 2
+
+
+def test_stream_reader_writes_to_log_file(tmp_path):
+    """When passed a log_file, every line is also written to disk."""
+    from dpmd.proc_logs import ProcessLogFile
+
+    lock = threading.Lock()
+    output_list = []
+    log_path = tmp_path / "p.log"
+    log_file = ProcessLogFile(str(log_path), max_bytes=10_000, backups=1)
+
+    stream_reader(io.StringIO("a\nb\n"), output_list, lock, log_file=log_file)
+    log_file.close()
+
+    assert log_path.read_text() == "a\nb\n"
 
 
 # ---------------------------------------------------------------------------

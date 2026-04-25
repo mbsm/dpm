@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from dpm.constants import DPM_PROTOCOL_VERSION
-from dpm_msgs import host_info_t, host_procs_t, proc_info_t, proc_output_t
+from dpm_msgs import host_info_t, host_procs_t, log_chunk_t, proc_info_t
 
 
 # ---------------------------------------------------------------------------
@@ -63,15 +63,17 @@ def _host_procs(hostname, procs):
     return msg
 
 
-def _proc_output(name, stdout="", stderr="", hostname="host1"):
-    msg = proc_output_t()
+def _log_chunk(name, content="", hostname="host1", request_seq=0,
+               chunk_index=0, last=False):
+    msg = log_chunk_t()
     msg.protocol_version = DPM_PROTOCOL_VERSION
+    msg.request_seq = request_seq
     msg.timestamp = int(time.time() * 1e6)
-    msg.name = name
     msg.hostname = hostname
-    msg.group = ""
-    msg.stdout = stdout
-    msg.stderr = stderr
+    msg.name = name
+    msg.chunk_index = chunk_index
+    msg.last = last
+    msg.content = content
     return msg
 
 
@@ -93,11 +95,11 @@ def test_host_procs_with_wrong_protocol_version_is_dropped(client):
     assert ("h1", "p1") not in client.procs
 
 
-def test_proc_output_with_wrong_protocol_version_is_dropped(client):
-    msg = _proc_output("p1", stdout="hello")
+def test_log_chunk_with_wrong_protocol_version_is_dropped(client):
+    msg = _log_chunk("p1", content="hello")
     msg.protocol_version = DPM_PROTOCOL_VERSION + 1
-    client.proc_outputs_handler(None, msg.encode())
-    assert client.get_proc_output_last("p1") is None
+    client.log_chunks_handler(None, msg.encode())
+    assert "p1" not in client.proc_output_buffers
 
 
 # ---------------------------------------------------------------------------
@@ -186,49 +188,66 @@ def test_host_procs_preserves_proc_fields(client):
 
 
 # ---------------------------------------------------------------------------
-# proc_outputs_handler
+# log_chunks_handler — live-publish path (request_seq == 0)
 # ---------------------------------------------------------------------------
 
-def test_proc_output_stored_in_last_message(client):
-    msg = _proc_output("p1", stdout="hello")
-    client.proc_outputs_handler(None, msg.encode())
-    last = client.get_proc_output_last("p1")
-    assert last is not None
-    assert last.stdout == "hello"
+def test_log_chunk_metadata_stored(client):
+    msg = _log_chunk("p1", content="hello", hostname="h1")
+    client.log_chunks_handler(None, msg.encode())
+    last_us, last_host = client.get_proc_output_metadata("p1")
+    assert last_us > 0
+    assert last_host == "h1"
 
 
-def test_proc_output_appended_to_buffer(client):
-    client.proc_outputs_handler(None, _proc_output("p1", stdout="first").encode())
-    client.proc_outputs_handler(None, _proc_output("p1", stdout="second").encode())
+def test_log_chunk_appended_to_buffer(client):
+    client.log_chunks_handler(None, _log_chunk("p1", content="first").encode())
+    client.log_chunks_handler(None, _log_chunk("p1", content="second").encode())
     buffers = client.proc_output_buffers
     assert "first" in buffers["p1"]
     assert "second" in buffers["p1"]
 
 
-def test_proc_output_stderr_prefixed(client):
-    client.proc_outputs_handler(None, _proc_output("p1", stderr="an error").encode())
-    buffers = client.proc_output_buffers
-    assert "[stderr]" in buffers["p1"]
-    assert "an error" in buffers["p1"]
-
-
-def test_proc_output_empty_message_ignored(client):
-    client.proc_outputs_handler(None, _proc_output("p1", stdout="", stderr="").encode())
+def test_log_chunk_empty_content_ignored(client):
+    client.log_chunks_handler(None, _log_chunk("p1", content="").encode())
     assert "p1" not in client.proc_output_buffers
 
 
-def test_proc_output_buffer_trimmed_to_2mb(client):
+def test_log_chunk_buffer_trimmed_to_2mb(client):
     MAX_BYTES = 2 * 1024 * 1024
     big = "x" * (MAX_BYTES + 5000)
-    client.proc_outputs_handler(None, _proc_output("p1", stdout=big).encode())
+    client.log_chunks_handler(None, _log_chunk("p1", content=big).encode())
     buffers = client.proc_output_buffers
     assert len(buffers["p1"]) <= MAX_BYTES
 
 
-def test_proc_output_trim_increments_generation(client):
+def test_log_chunk_trim_increments_generation(client):
     MAX_BYTES = 2 * 1024 * 1024
     big = "x" * (MAX_BYTES + 5000)
-    client.proc_outputs_handler(None, _proc_output("p1", stdout=big).encode())
+    client.log_chunks_handler(None, _log_chunk("p1", content=big).encode())
     state = client._proc_output_states.get("p1")
     assert state is not None
     assert state.gen >= 1
+
+
+# ---------------------------------------------------------------------------
+# log_chunks_handler — read_log response path (request_seq != 0)
+# ---------------------------------------------------------------------------
+
+def test_read_log_chunk_routes_to_pending_request(client):
+    """Chunks with request_seq != 0 must not pollute the live tail buffer."""
+    import threading
+    seq = 12345
+    slot = {"parts": [], "done": False, "event": threading.Event()}
+    with client._read_log_lock:
+        client._read_log_pending[seq] = slot
+
+    msg1 = _log_chunk("p1", content="alpha", request_seq=seq, chunk_index=0, last=False)
+    msg2 = _log_chunk("p1", content="beta",  request_seq=seq, chunk_index=1, last=True)
+    client.log_chunks_handler(None, msg1.encode())
+    client.log_chunks_handler(None, msg2.encode())
+
+    assert slot["done"] is True
+    assert slot["event"].is_set()
+    assert "".join(slot["parts"]) == "alphabeta"
+    # Live tail buffer must remain untouched.
+    assert "p1" not in client.proc_output_buffers

@@ -19,7 +19,7 @@ def agent_with_max_restarts(config_path):
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
-                "proc_outputs_channel": "DPM/proc_outputs",
+                "log_chunks_channel": "DPM/log_chunks",
                 "host_procs_channel": "DPM/host_procs",
                 "stop_timeout": 2,
                 "monitor_interval": 1,

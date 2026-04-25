@@ -10,11 +10,11 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["protocol_version", "seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "rt_priority", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
+    __slots__ = ["protocol_version", "seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "rt_priority", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit", "since_us", "tail_lines", "ttl_seconds"]
 
-    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "int32_t", "boolean", "string", "string", "double", "int64_t"]
+    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "int32_t", "boolean", "string", "string", "double", "int64_t", "int64_t", "int32_t", "int32_t"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
         self.protocol_version = 0
@@ -32,6 +32,9 @@ class command_t(object):
         self.cpuset = ""
         self.cpu_limit = 0.0
         self.mem_limit = 0
+        self.since_us = 0
+        self.tail_lines = 0
+        self.ttl_seconds = 0
 
     def encode(self):
         buf = BytesIO()
@@ -70,7 +73,7 @@ class command_t(object):
         buf.write(struct.pack('>I', len(__cpuset_encoded)+1))
         buf.write(__cpuset_encoded)
         buf.write(b"\0")
-        buf.write(struct.pack(">dq", self.cpu_limit, self.mem_limit))
+        buf.write(struct.pack(">dqqii", self.cpu_limit, self.mem_limit, self.since_us, self.tail_lines, self.ttl_seconds))
 
     def decode(data):
         if hasattr(data, 'read'):
@@ -103,13 +106,13 @@ class command_t(object):
         self.work_dir = buf.read(__work_dir_len)[:-1].decode('utf-8', 'replace')
         __cpuset_len = struct.unpack('>I', buf.read(4))[0]
         self.cpuset = buf.read(__cpuset_len)[:-1].decode('utf-8', 'replace')
-        self.cpu_limit, self.mem_limit = struct.unpack(">dq", buf.read(16))
+        self.cpu_limit, self.mem_limit, self.since_us, self.tail_lines, self.ttl_seconds = struct.unpack(">dqqii", buf.read(32))
         return self
     _decode_one = staticmethod(_decode_one)
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0x9a5c1fb54ab08679) & 0xffffffffffffffff
+        tmphash = (0x67dfe8b8f90f75ff) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

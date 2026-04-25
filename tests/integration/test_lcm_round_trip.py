@@ -63,7 +63,7 @@ def daemon_cfg(tmp_path) -> str:
         "lcm_url": _unique_lcm_url(),
         "command_channel": "ITEST/commands",
         "host_info_channel": "ITEST/host_info",
-        "proc_outputs_channel": "ITEST/proc_outputs",
+        "log_chunks_channel": "ITEST/log_chunks",
         "host_procs_channel": "ITEST/host_procs",
         "stop_timeout": 2,
         "monitor_interval": 0.2,

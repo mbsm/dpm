@@ -11,10 +11,17 @@ from PyQt5.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTextEdit, QVBoxL
 
 class ProcessOutput(QDialog):
     def __init__(
-        self, proc_name: str, initial_text: str = "", initial_gen: int = 0, client=None, parent=None
+        self,
+        proc_name: str,
+        host_name: str = "",
+        initial_text: str = "",
+        initial_gen: int = 0,
+        client=None,
+        parent=None,
     ):
         super().__init__(parent)
         self.proc_name = proc_name
+        self.host_name = host_name
         self.client = client
 
         self.setWindowTitle(f"Output: {proc_name}")
@@ -44,6 +51,25 @@ class ProcessOutput(QDialog):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._refresh_from_client)
         self._timer.start(500)
+
+        # Live output is silent-by-default on the daemon. Renew the
+        # subscription periodically while this window is open; on close
+        # the subscription expires on its own (5 s TTL).
+        self._sub_timer = QTimer(self)
+        self._sub_timer.timeout.connect(self._renew_subscription)
+        self._sub_timer.start(2000)
+        self._renew_subscription()  # send the first one immediately
+
+    def _renew_subscription(self) -> None:
+        if self.client is None or not self.host_name:
+            return
+        if not hasattr(self.client, "subscribe_output"):
+            return
+        try:
+            self.client.subscribe_output(self.proc_name, self.host_name, ttl_seconds=5)
+        except Exception as e:
+            logging.debug("subscribe_output failed for %s@%s: %s",
+                          self.proc_name, self.host_name, e)
 
     def _clear_output(self) -> None:
         self.text.clear()
@@ -82,8 +108,9 @@ class ProcessOutput(QDialog):
         sb.setValue(sb.maximum())
 
     def closeEvent(self, event):
-        try:
-            self._timer.stop()
-        except (RuntimeError, AttributeError) as e:
-            logging.debug("ProcessOutput timer stop failed: %s", e)
+        for t in ("_timer", "_sub_timer"):
+            try:
+                getattr(self, t).stop()
+            except (RuntimeError, AttributeError) as e:
+                logging.debug("ProcessOutput timer stop failed (%s): %s", t, e)
         super().closeEvent(event)

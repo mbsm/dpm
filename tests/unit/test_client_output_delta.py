@@ -80,18 +80,19 @@ def test_delta_unknown_process_returns_empty(client):
 
 def test_trim_via_handler_increments_generation(client):
     from dpm.constants import DPM_PROTOCOL_VERSION
-    from dpm_msgs import proc_output_t
+    from dpm_msgs import log_chunk_t
 
     MAX_BYTES = 2 * 1024 * 1024
-    msg = proc_output_t()
+    msg = log_chunk_t()
     msg.protocol_version = DPM_PROTOCOL_VERSION
+    msg.request_seq = 0  # live publish
     msg.timestamp = 0
-    msg.name = "p1"
     msg.hostname = "h1"
-    msg.group = ""
-    msg.stdout = "x" * (MAX_BYTES + 1000)
-    msg.stderr = ""
-    client.proc_outputs_handler(None, msg.encode())
+    msg.name = "p1"
+    msg.chunk_index = 0
+    msg.last = False
+    msg.content = "x" * (MAX_BYTES + 1000)
+    client.log_chunks_handler(None, msg.encode())
 
     gen, _, reset, _ = client.get_proc_output_delta("p1", 0, 0)
     assert gen >= 1

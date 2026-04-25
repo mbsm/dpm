@@ -11,7 +11,7 @@ def make_valid_config(**overrides):
         "lcm_url": "udpm://239.255.76.68:7667?ttl=1",
         "command_channel": "DPM/commands",
         "host_info_channel": "DPM/host_info",
-        "proc_outputs_channel": "DPM/proc_outputs",
+        "log_chunks_channel": "DPM/log_chunks",
         "host_procs_channel": "DPM/host_procs",
         "stop_timeout": 2,
         "monitor_interval": 1,
@@ -43,7 +43,7 @@ def _make_agent(path):
 def test_valid_config_loads_all_required_keys(valid_config_file):
     agent = _make_agent(valid_config_file)
     required = [
-        "command_channel", "host_info_channel", "proc_outputs_channel",
+        "command_channel", "host_info_channel", "log_chunks_channel",
         "host_procs_channel", "stop_timeout", "monitor_interval",
         "output_interval", "host_status_interval", "procs_status_interval",
         "lcm_url",
@@ -77,7 +77,7 @@ def test_bad_yaml_raises_value_error(tmp_path):
 @pytest.mark.parametrize("missing_key", [
     "command_channel",
     "host_info_channel",
-    "proc_outputs_channel",
+    "log_chunks_channel",
     "host_procs_channel",
     "lcm_url",
     "stop_timeout",

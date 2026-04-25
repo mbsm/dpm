@@ -11,7 +11,7 @@ def make_valid_config(**overrides):
         "lcm_url": "udpm://239.255.76.68:7667?ttl=1",
         "command_channel": "DPM/commands",
         "host_info_channel": "DPM/host_info",
-        "proc_outputs_channel": "DPM/proc_outputs",
+        "log_chunks_channel": "DPM/log_chunks",
         "host_procs_channel": "DPM/host_procs",
     }
     cfg.update(overrides)
@@ -30,7 +30,7 @@ def _make_client(path):
 
 def test_valid_config_loads_all_required_keys(config_path):
     s = _make_client(config_path)
-    for key in ["command_channel", "host_info_channel", "proc_outputs_channel",
+    for key in ["command_channel", "host_info_channel", "log_chunks_channel",
                 "host_procs_channel", "lcm_url"]:
         assert key in s.config
 
@@ -71,7 +71,7 @@ def test_bad_yaml_raises_value_error(tmp_path):
 @pytest.mark.parametrize("missing_key", [
     "command_channel",
     "host_info_channel",
-    "proc_outputs_channel",
+    "log_chunks_channel",
     "host_procs_channel",
     "lcm_url",
 ])

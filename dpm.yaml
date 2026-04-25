@@ -4,7 +4,7 @@
 lcm_url: "udpm://239.255.76.67:7667?ttl=1"
 command_channel: "DPM/commands"
 host_info_channel: "DPM/host_info"
-proc_outputs_channel: "DPM/proc_outputs"
+log_chunks_channel: "DPM/log_chunks"
 host_procs_channel: "DPM/host_procs"
 
 # Timer Intervals in s

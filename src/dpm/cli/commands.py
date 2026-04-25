@@ -375,6 +375,28 @@ def cmd_shutdown(client, args) -> int:
     return _run_launch_script(client, args.path, reverse=True)
 
 
+_SINCE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _parse_since(spec: str) -> int:
+    """Parse a 'since' shorthand (10s, 30m, 2h, 1d) into a µs-since-epoch lower bound.
+
+    Empty string returns 0 (no filter). Invalid inputs raise ValueError.
+    """
+    if not spec:
+        return 0
+    spec = spec.strip().lower()
+    unit = spec[-1]
+    if unit not in _SINCE_UNIT_SECONDS:
+        raise ValueError(f"--since must end in s/m/h/d (got {spec!r})")
+    try:
+        magnitude = float(spec[:-1])
+    except ValueError as e:
+        raise ValueError(f"--since: bad number in {spec!r}") from e
+    delta_s = magnitude * _SINCE_UNIT_SECONDS[unit]
+    return int((time.time() - delta_s) * 1_000_000)
+
+
 def cmd_logs(client, args) -> int:
     name = args.name
     host = args.host
@@ -396,26 +418,48 @@ def cmd_logs(client, args) -> int:
             return 1
         host = matches[0][0]
 
-    print(f"Streaming output for {name}@{host} (Ctrl+C to stop)...\n")
+    try:
+        since_us = _parse_since(args.since)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
+    # --persistent walks rotated history — meaningful only when no tail cap.
+    tail = 0 if args.persistent else args.tail
+
+    history = client.read_log(
+        name, host, since_us=since_us, tail_lines=tail, timeout=5.0,
+    )
+    if history:
+        sys.stdout.write(history)
+        if not history.endswith("\n"):
+            sys.stdout.write("\n")
+        sys.stdout.flush()
+
+    if not args.follow:
+        return 0
+
+    # Live tail: keep the subscription warm with periodic renewals.
+    # On Ctrl+C the subscription expires naturally on the daemon side.
+    print(f"--- following {name}@{host} (Ctrl+C to stop) ---", file=sys.stderr)
     last_gen = 0
     last_len = 0
-    idle_count = 0
+    next_renew = 0.0
     try:
         while True:
-            gen, text, reset, cur_len = client.get_proc_output_delta(
+            now = time.monotonic()
+            if now >= next_renew:
+                client.subscribe_output(name, host, ttl_seconds=5)
+                next_renew = now + 2.0
+            gen, text, _reset, cur_len = client.get_proc_output_delta(
                 name, last_gen, last_len
             )
             if text:
                 sys.stdout.write(text)
                 sys.stdout.flush()
-                idle_count = 0
-            else:
-                idle_count += 1
             last_gen = gen
             last_len = cur_len
-            # Adaptive: 50ms when active, ramp up to 500ms when idle
-            time.sleep(min(0.05 * (idle_count + 1), 0.5))
+            time.sleep(0.1)
     except KeyboardInterrupt:
-        print()  # clean newline after ^C
+        print()
     return 0

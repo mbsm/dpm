@@ -16,8 +16,8 @@ try:
         command_t,
         host_info_t,
         host_procs_t,
+        log_chunk_t,
         proc_info_t,
-        proc_output_t,
     )
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
@@ -33,10 +33,11 @@ from dpm.constants import DPM_PROTOCOL_VERSION
 
 @dataclass
 class _ProcOutputState:
-    """Per-process output state: last LCM message, rolling text buffer, generation counter."""
-    last_msg: Optional[proc_output_t] = None
+    """Per-process output state: rolling text buffer + generation counter."""
     buf: str = ""
     gen: int = 0
+    last_seen_us: int = 0  # daemon timestamp of the most recent chunk
+    last_host: str = ""    # which host published it
 
 
 def _version_ok(msg, _logged: dict = {}) -> bool:
@@ -76,8 +77,14 @@ class Client:
 
         self.command_channel = self.config["command_channel"]
         self.host_info_channel = self.config["host_info_channel"]
-        self.proc_outputs_channel = self.config["proc_outputs_channel"]
+        self.log_chunks_channel = self.config["log_chunks_channel"]
         self.host_procs_channel = self.config["host_procs_channel"]
+
+        # Pending read_log requests: seq -> assembly state.
+        # Chunks may arrive interleaved with other traffic; we collect by
+        # request_seq and signal completion when last=True arrives.
+        self._read_log_pending: Dict[int, dict] = {}
+        self._read_log_lock = threading.Lock()
 
         self.lc_url = self.config["lcm_url"]
 
@@ -127,7 +134,7 @@ class Client:
         return load_dpm_config(config_path, [
             "command_channel",
             "host_info_channel",
-            "proc_outputs_channel",
+            "log_chunks_channel",
             "host_procs_channel",
             "lcm_url",
         ])
@@ -149,7 +156,7 @@ class Client:
         new_pub = lcm.LCM(self.lc_url)
         new_sub.subscribe(self.host_info_channel, self.host_info_handler)
         new_sub.subscribe(self.host_procs_channel, self.host_procs_handler)
-        new_sub.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
+        new_sub.subscribe(self.log_chunks_channel, self.log_chunks_handler)
 
         self.lc_sub = new_sub
         self.lc_pub = new_pub
@@ -164,12 +171,12 @@ class Client:
                         pass
 
         logging.info(
-            "Client LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
+            "Client LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s log_chunks=%s",
             self.lc_url,
             self.command_channel,
             self.host_info_channel,
             self.host_procs_channel,
-            self.proc_outputs_channel,
+            self.log_chunks_channel,
         )
 
     def _reconnect_lcm(self, err: Exception) -> None:
@@ -253,30 +260,33 @@ class Client:
             for name in names:
                 self._proc_output_states.pop(name, None)
 
-    def proc_outputs_handler(self, _channel, data) -> None:
+    def log_chunks_handler(self, _channel, data) -> None:
         try:
-            msg = proc_output_t.decode(data)
+            msg = log_chunk_t.decode(data)
         except Exception as e:
-            logging.error("proc_outputs_handler: decode failed: %s", e)
+            logging.error("log_chunks_handler: decode failed: %s", e)
             return
         if not _version_ok(msg):
             return
-        name = msg.name
 
-        out = getattr(msg, "stdout", "") or ""
-        err = getattr(msg, "stderr", "") or ""
-
-        if not out and not err:
+        # request_seq != 0 means this is a response to a read_log call we
+        # made. Route those into the pending-request collector below;
+        # they don't belong in the live tail buffer.
+        if msg.request_seq != 0:
+            self._collect_read_log_chunk(msg)
             return
 
-        parts = [out] if out else []
-        if err:
-            parts.append("[stderr]\n" + err)
-        chunk = "\n".join(parts)
+        # Live publish: a daemon is sending us output for a process we
+        # have an active subscription on.
+        name = msg.name
+        chunk = msg.content or ""
+        if not chunk:
+            return
 
         with self._outputs_lock:
             state = self._proc_output_states.setdefault(name, _ProcOutputState())
-            state.last_msg = msg
+            state.last_seen_us = int(getattr(msg, "timestamp", 0))
+            state.last_host = msg.hostname
 
             buf = state.buf
             if buf and not buf.endswith("\n") and not chunk.startswith("\n"):
@@ -290,6 +300,18 @@ class Client:
                 state.gen += 1
 
             state.buf = buf
+
+    def _collect_read_log_chunk(self, msg) -> None:
+        """Assemble chunks for an in-flight read_log request keyed by request_seq."""
+        with self._read_log_lock:
+            slot = self._read_log_pending.get(msg.request_seq)
+            if slot is None:
+                # Request not from us, or already completed and consumed.
+                return
+            slot["parts"].append(msg.content or "")
+            if msg.last:
+                slot["done"] = True
+                slot["event"].set()
 
     def get_proc_output_delta(
         self, proc_name: str, last_gen: int, last_len: int
@@ -320,13 +342,16 @@ class Client:
         # Normal case: append only
         return cur_gen, buf[last_len:], False, cur_len
 
-    def get_proc_output_last(self, proc_name: str) -> Optional[proc_output_t]:
-        """
-        Thread-safe: return the last proc_output_t for a single process (no dict copy).
+    def get_proc_output_metadata(self, proc_name: str) -> Tuple[int, str]:
+        """Thread-safe: return (last_seen_us, last_host) for *proc_name*.
+
+        Returns ``(0, "")`` if no output has been observed.
         """
         with self._outputs_lock:
             state = self._proc_output_states.get(proc_name)
-            return state.last_msg if state else None
+            if state is None:
+                return 0, ""
+            return state.last_seen_us, state.last_host
 
     def clear_proc_output(self, proc_name: str) -> None:
         """Thread-safe: flush the output buffer for *proc_name*."""
@@ -381,7 +406,11 @@ class Client:
         cpuset: str = "",
         cpu_limit: float = 0.0,
         mem_limit: int = 0,
-    ) -> None:
+        since_us: int = 0,
+        tail_lines: int = 0,
+        ttl_seconds: int = 0,
+    ) -> int:
+        """Publish a command_t. Returns the seq stamped on the message."""
         msg = command_t()
         msg.action = action
         msg.name = name
@@ -396,7 +425,12 @@ class Client:
         msg.cpuset = cpuset
         msg.cpu_limit = float(cpu_limit)
         msg.mem_limit = int(mem_limit)
+        msg.since_us = int(since_us)
+        msg.tail_lines = int(tail_lines)
+        msg.ttl_seconds = int(ttl_seconds)
+        seq = self._cmd_seq
         self._publish(msg)
+        return seq
 
     def create_proc(
         self,
@@ -440,6 +474,50 @@ class Client:
     def set_persistence(self, host: str, enabled: bool) -> None:
         self._send_command("set_persistence", hostname=host, exec_command="on" if enabled else "off")
 
+    def read_log(
+        self,
+        cmd_name: str,
+        host: str,
+        *,
+        since_us: int = 0,
+        tail_lines: int = 0,
+        timeout: float = 5.0,
+    ) -> str:
+        """Synchronously fetch on-disk log content for *cmd_name* on *host*.
+
+        Blocks until the daemon's final chunk arrives or *timeout* elapses.
+        Returns the concatenated content (may be empty if no log exists or
+        if filters excluded everything).
+        """
+        slot = {"parts": [], "done": False, "event": threading.Event()}
+        seq = self._cmd_seq
+        with self._read_log_lock:
+            self._read_log_pending[seq] = slot
+        try:
+            self._send_command(
+                "read_log", name=cmd_name, hostname=host,
+                since_us=since_us, tail_lines=tail_lines,
+            )
+            slot["event"].wait(timeout=timeout)
+        finally:
+            with self._read_log_lock:
+                self._read_log_pending.pop(seq, None)
+        return "".join(slot["parts"])
+
+    def subscribe_output(
+        self, cmd_name: str, host: str, ttl_seconds: int = 5
+    ) -> None:
+        """Tell the daemon to start (or extend) live output publishing for *cmd_name*.
+
+        Subscriptions auto-expire — call again every ttl_seconds/2 or so
+        to keep them alive while the user is watching. No explicit
+        unsubscribe needed; just stop renewing.
+        """
+        self._send_command(
+            "subscribe_output", name=cmd_name, hostname=host,
+            ttl_seconds=int(ttl_seconds),
+        )
+
     # -----------------
     # Thread-safe snapshots for GUI
     # -----------------
@@ -454,10 +532,10 @@ class Client:
             return dict(self._procs)
 
     @property
-    def proc_outputs(self) -> Dict[str, proc_output_t]:
+    def proc_output_buffers_snapshot(self) -> Dict[str, str]:
+        """Snapshot of the rolling text buffer per process. Empty if not subscribed."""
         with self._outputs_lock:
-            return {k: s.last_msg for k, s in self._proc_output_states.items()
-                    if s.last_msg is not None}
+            return {k: s.buf for k, s in self._proc_output_states.items()}
 
     # -----------------
     # Thread management

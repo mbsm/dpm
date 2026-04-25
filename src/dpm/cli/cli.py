@@ -175,9 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_move.add_argument("source", help="name@host (source)")
     p_move.add_argument("dest", help="newname@newhost or @newhost (reuse name)")
 
-    # dpm logs name[@host]
-    p_logs = sub.add_parser("logs", help="Stream process output (Ctrl+C to stop)")
+    # dpm logs name[@host] [--since 10m] [--tail 200] [--follow]
+    p_logs = sub.add_parser(
+        "logs",
+        help="Show on-disk process logs; --follow streams live output",
+    )
     p_logs.add_argument("target", help="name or name@host")
+    p_logs.add_argument("--since", default="",
+                        help="Show entries newer than: e.g. 30s, 10m, 2h, 1d")
+    p_logs.add_argument("--tail", type=int, default=200,
+                        help="Last N lines (default 200; 0 = no cap)")
+    p_logs.add_argument("-f", "--follow", action="store_true",
+                        help="After printing history, subscribe to live output")
+    p_logs.add_argument("--persistent", action="store_true",
+                        help="Walk rotated history (.log.1, .log.2, ...) — overrides --tail/--since defaults")
 
     # dpm launch script.yaml
     p_launch = sub.add_parser("launch", help="Execute a launch script (ordered startup)")

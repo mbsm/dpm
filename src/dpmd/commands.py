@@ -2,16 +2,19 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING
 
 try:
-    from dpm_msgs import command_t
+    from dpm_msgs import command_t, log_chunk_t
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
         "Failed to import 'dpm_msgs'. Install the project via 'pip install -e .'."
     ) from e
 
 from dpm.constants import DPM_PROTOCOL_VERSION
+from dpmd.limits import MAX_OUTPUT_CHUNK
+from dpmd.log_reader import chunk as _chunk_text, read_log_lines
 from dpmd.processes import (
     create_process,
     delete_process,
@@ -20,6 +23,11 @@ from dpmd.processes import (
     stop_group,
     stop_process,
 )
+
+# Default subscription lifetime when client sends ttl_seconds=0.
+_DEFAULT_SUBSCRIPTION_TTL = 5.0
+# Hard cap to bound the impact of a misbehaving / forgetful client.
+_MAX_SUBSCRIPTION_TTL = 60.0
 
 if TYPE_CHECKING:
     from dpmd.daemon import Daemon
@@ -106,6 +114,10 @@ def command_handler(d: "Daemon", channel, data) -> None:
             cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
             isolated=msg.isolated, rt_priority=msg.rt_priority,
         )
+    elif action == "read_log":
+        globals()["handle_read_log"](d, msg)
+    elif action == "subscribe_output":
+        globals()["handle_subscribe_output"](d, msg)
     elif action in _CMD_DISPATCH:
         target, attr = _CMD_DISPATCH[action]
         value = getattr(msg, attr)
@@ -118,3 +130,55 @@ def command_handler(d: "Daemon", channel, data) -> None:
             globals()[target](d, value)
     else:
         logging.warning("Unknown action: %s", action)
+
+
+def handle_read_log(d: "Daemon", msg) -> None:
+    """Read on-disk log for ``msg.name`` and publish chunks back to the client.
+
+    Filters: ``since_us`` (drop files older than that mtime); ``tail_lines``
+    (return only the newest N lines).  Always emits at least one chunk —
+    the final one has ``last=True`` so the client knows when to stop.
+    """
+    log_dir = getattr(d, "process_log_dir", None)
+    if not log_dir:
+        text = ""
+    else:
+        text = read_log_lines(
+            log_dir, msg.name, since_us=msg.since_us, tail_lines=msg.tail_lines,
+        )
+
+    chunks = list(_chunk_text(text, MAX_OUTPUT_CHUNK)) or [""]
+    now_us = int(time.time() * 1_000_000)
+    for idx, piece in enumerate(chunks):
+        out = log_chunk_t()
+        out.protocol_version = DPM_PROTOCOL_VERSION
+        out.request_seq = msg.seq
+        out.timestamp = now_us
+        out.hostname = d.hostname
+        out.name = msg.name
+        out.chunk_index = idx
+        out.last = (idx == len(chunks) - 1)
+        out.content = piece
+        try:
+            d.lc.publish(d.log_chunks_channel, out.encode())
+        except OSError as e:
+            logging.error("read_log: publish failed for %s: %s", msg.name, e)
+            d._handle_lcm_error(e)
+            return
+
+
+def handle_subscribe_output(d: "Daemon", msg) -> None:
+    """Refresh / extend a live-output subscription for ``msg.name``.
+
+    The publish loop in dpmd.telemetry.publish_procs_outputs only emits
+    a chunk for processes with a non-expired entry here.
+    """
+    ttl = float(msg.ttl_seconds) if msg.ttl_seconds > 0 else _DEFAULT_SUBSCRIPTION_TTL
+    ttl = min(ttl, _MAX_SUBSCRIPTION_TTL)
+    expires_at = time.monotonic() + ttl
+    with d._subscriptions_lock:
+        d.output_subscriptions[msg.name] = expires_at
+    logging.debug(
+        "subscribe_output: %s active for %.1fs (req_seq=%d)",
+        msg.name, ttl, msg.seq,
+    )

@@ -110,6 +110,12 @@ renames (no compatibility shims are provided):
 - Systemd unit: `dpm-agent.service` → `dpmd.service`.
 - Python class: `Supervisor` → `Client` (`from dpm import Client`).
 - CLI verbs: `create` → `add`, `delete` → `remove`, `save` → `export`, `load` → `import`.
+- LCM channel: `proc_outputs_channel` → `log_chunks_channel` (and the
+  `proc_output_t` type was replaced by `log_chunk_t`). The `dpm logs`
+  command now reads from on-disk per-process log files
+  (`/var/log/dpm/processes/<name>.log`) by default; pass `--follow` to
+  subscribe for live output. Live output is silent on the wire unless
+  a client is actively subscribed.
 
 ## Documentation
 

@@ -50,4 +50,17 @@ struct command_t
 
     // cgroup memory limit in bytes (0 = unlimited)
     int64_t mem_limit;
+
+    // read_log: lower bound on log line timestamps (µs since epoch).
+    // 0 means "no lower bound — return everything we have".
+    int64_t since_us;
+
+    // read_log: cap on returned lines (newest N after since_us filter).
+    // 0 means "no cap".
+    int32_t tail_lines;
+
+    // subscribe_output: seconds the subscription stays valid before
+    // expiring. The client renews while still attached. 0 means
+    // "use a sensible default" (5 s).
+    int32_t ttl_seconds;
 }

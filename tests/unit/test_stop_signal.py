@@ -18,7 +18,7 @@ def agent_with_sigint():
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
-                "proc_outputs_channel": "DPM/proc_outputs",
+                "log_chunks_channel": "DPM/log_chunks",
                 "host_procs_channel": "DPM/host_procs",
                 "stop_timeout": 2,
                 "monitor_interval": 1,
@@ -108,7 +108,7 @@ def test_invalid_stop_signal_falls_back():
             mock_config.return_value = {
                 "command_channel": "DPM/commands",
                 "host_info_channel": "DPM/host_info",
-                "proc_outputs_channel": "DPM/proc_outputs",
+                "log_chunks_channel": "DPM/log_chunks",
                 "host_procs_channel": "DPM/host_procs",
                 "stop_timeout": 2,
                 "monitor_interval": 1,

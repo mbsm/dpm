@@ -15,8 +15,8 @@ try:
     from dpm_msgs import (
         host_info_t,
         host_procs_t,
+        log_chunk_t,
         proc_info_t,
-        proc_output_t,
     )
 except ModuleNotFoundError as e:
     raise ModuleNotFoundError(
@@ -217,34 +217,63 @@ def publish_host_procs(d: "Daemon") -> None:
 
 
 def publish_procs_outputs(d: "Daemon") -> None:
-    """Publish buffered stdout/stderr chunks for all processes.
+    """Publish live output chunks only for processes a client has subscribed to.
 
-    At most MAX_OUTPUT_CHUNK bytes are sent per stream per call; any
-    remaining bytes stay in the buffer and are sent on the next cycle.
-
-    The per-proc buffer is a chunked FIFO (``_OutBuf``) so draining a
-    chunk never rebuilds the tail — publish is O(chunk_size), not O(buffer).
+    Subscriptions are short-TTL (~5 s) entries refreshed by clients while
+    they're actively watching with ``dpm logs --follow``. Without an
+    active subscription, the daemon still reads pipes (so the child
+    doesn't block) and writes to the on-disk log — it just doesn't
+    publish on the wire. That's the whole point: silent-by-default.
     """
-    for process_name, proc_info in d.processes.items():
-        stdout_buf = proc_info.stdout
-        stderr_buf = proc_info.stderr
-        if not stdout_buf and not stderr_buf:
+    now_mono = time.monotonic()
+    with d._subscriptions_lock:
+        # Drop expired entries up front so a chatty proc doesn't keep
+        # re-checking a stale dict on every cycle.
+        for name in [n for n, exp in d.output_subscriptions.items() if exp <= now_mono]:
+            d.output_subscriptions.pop(name, None)
+        active = set(d.output_subscriptions.keys())
+
+    if not active:
+        # Drain ring buffers anyway so they don't grow unbounded while
+        # nobody's listening. Without this, `_OutBuf.append` would still
+        # cap memory at MAX_OUTPUT_BUFFER, but we'd carry stale content
+        # forward indefinitely.
+        for proc_info in d.processes.values():
+            proc_info.stdout.take(MAX_OUTPUT_CHUNK)
+            proc_info.stderr.take(MAX_OUTPUT_CHUNK)
+        return
+
+    now_us = int(time.time() * 1_000_000)
+    for process_name in active:
+        proc_info = d.processes.get(process_name)
+        if proc_info is None:
             continue
 
-        stdout_chunk = stdout_buf.take(MAX_OUTPUT_CHUNK)
-        stderr_chunk = stderr_buf.take(MAX_OUTPUT_CHUNK)
+        stdout_chunk = proc_info.stdout.take(MAX_OUTPUT_CHUNK)
+        stderr_chunk = proc_info.stderr.take(MAX_OUTPUT_CHUNK)
+        if not stdout_chunk and not stderr_chunk:
+            continue
 
-        msg = proc_output_t()
+        # Merge stderr after stdout for the live-publish path. The on-disk
+        # log already has them interleaved; here we don't have line-level
+        # ordering so a deterministic stdout-then-stderr is the best we
+        # can do without a more invasive plumbing change.
+        content = stdout_chunk + stderr_chunk
+        idx = d._live_chunk_index.get(process_name, 0)
+        d._live_chunk_index[process_name] = idx + 1
+
+        msg = log_chunk_t()
         msg.protocol_version = DPM_PROTOCOL_VERSION
-        msg.timestamp = int(time.time() * 1e6)
-        msg.name = process_name
+        msg.request_seq = 0  # unsolicited live publish
+        msg.timestamp = now_us
         msg.hostname = d.hostname
-        msg.group = proc_info.group
-        msg.stdout = stdout_chunk
-        msg.stderr = stderr_chunk
+        msg.name = process_name
+        msg.chunk_index = idx
+        msg.last = False
+        msg.content = content
         try:
-            d.lc.publish(d.proc_outputs_channel, msg.encode())
+            d.lc.publish(d.log_chunks_channel, msg.encode())
         except OSError as e:
-            logging.error("Failed to publish proc output for %s: %s", process_name, e)
+            logging.error("Failed to publish log chunk for %s: %s", process_name, e)
             d._handle_lcm_error(e)
             return  # stop publishing this cycle; LCM will be reinitialized

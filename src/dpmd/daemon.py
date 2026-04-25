@@ -62,8 +62,15 @@ class Daemon:
     def __init__(self, config_file: str = "/etc/dpm/dpm.yaml"):
         self.config = self.load_config(config_file)
         self.host_info_channel = self.config["host_info_channel"]
-        self.proc_outputs_channel = self.config["proc_outputs_channel"]
         self.host_procs_channel = self.config["host_procs_channel"]
+        self.log_chunks_channel = self.config["log_chunks_channel"]
+
+        # Active live-output subscriptions: {process_name: monotonic_expiry}.
+        # Output is published only for processes with a non-expired entry.
+        self.output_subscriptions: dict = {}
+        self._subscriptions_lock = threading.Lock()
+        # Per-process chunk index for unsolicited live publishes.
+        self._live_chunk_index: dict = {}
         self.stop_timeout = self.config["stop_timeout"]
         self.max_restarts = int(self.config.get("max_restarts", -1))
 
@@ -200,7 +207,7 @@ class Daemon:
         config = load_dpm_config(config_path, [
             "command_channel",
             "host_info_channel",
-            "proc_outputs_channel",
+            "log_chunks_channel",
             "host_procs_channel",
             "stop_timeout",
             "monitor_interval",

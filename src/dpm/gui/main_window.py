@@ -911,13 +911,13 @@ class MainWindow(QMainWindow):
                     self.hosts_list.setCurrentItem(it)
                     break
 
-    def _view_output_direct(self, proc_name):
+    def _view_output_direct(self, proc_name, host_name=None):
         if not proc_name:
             QMessageBox.warning(self, "Warning", "No process selected.")
             return
-        self._open_output_window(proc_name)
+        self._open_output_window(proc_name, host_name)
 
-    def _open_output_window(self, proc_name: str):
+    def _open_output_window(self, proc_name: str, host_name: str = None):
         # Reuse existing window if still alive
         w = self.output_windows.get(proc_name)
         if w is not None:
@@ -928,6 +928,13 @@ class MainWindow(QMainWindow):
                     return
             except RuntimeError:
                 self.output_windows.pop(proc_name, None)
+
+        # Resolve host if the caller didn't pass one — pick the first match.
+        if not host_name:
+            for (h, n) in self.client.procs:
+                if n == proc_name:
+                    host_name = h
+                    break
 
         # Fetch full current buffer for this proc without copying whole dicts
         initial_text = ""
@@ -941,6 +948,7 @@ class MainWindow(QMainWindow):
 
         dlg = ProcessOutput(
             proc_name,
+            host_name=host_name or "",
             initial_text=initial_text,
             initial_gen=initial_gen,
             client=self.client,
@@ -1235,7 +1243,9 @@ class MainWindow(QMainWindow):
             menu.addAction(act_edit)
 
             act_view = QAction("View Output", self)
-            act_view.triggered.connect(lambda: self._view_output_direct(proc_name))
+            act_view.triggered.connect(
+                lambda: self._view_output_direct(proc_name, host_name)
+            )
             menu.addAction(act_view)
 
             act_move = QAction("Move...", self)
@@ -1308,7 +1318,7 @@ class MainWindow(QMainWindow):
             return
         for p in procs:
             try:
-                self._open_output_window(p.name)
+                self._open_output_window(p.name, getattr(p, "hostname", None))
             except Exception as e:
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug("Open output failed for %s: %s", p.name, e)
