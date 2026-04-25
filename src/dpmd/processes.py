@@ -28,6 +28,7 @@ from dpm.constants import (
 
 from dpmd.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
 from dpmd.limits import MAX_OUTPUT_BUFFER
+from dpmd.proc_logs import open_process_log
 
 try:
     from dpm_msgs import proc_output_t
@@ -46,7 +47,7 @@ def is_running(proc: psutil.Popen | None) -> bool:
     return proc.poll() is None
 
 
-def stream_reader(stream, output_list, lock: threading.Lock) -> None:
+def stream_reader(stream, output_list, lock: threading.Lock, log_file=None) -> None:
     try:
         while True:
             line = stream.readline()
@@ -57,8 +58,11 @@ def stream_reader(stream, output_list, lock: threading.Lock) -> None:
                 line = line.decode("utf-8", errors="replace")
             line = line.rstrip("\r\n")
             if line:
+                line_with_nl = line + "\n"
                 with lock:
-                    output_list.append(line + "\n")
+                    output_list.append(line_with_nl)
+                if log_file is not None:
+                    log_file.write(line_with_nl)
                 if logging.getLogger().isEnabledFor(logging.DEBUG):
                     logging.debug("Stream Reader: Captured line: %r", line)
     except (OSError, ValueError) as e:
@@ -182,6 +186,7 @@ class Proc:
     stderr_lines: list = field(default_factory=list)
     stdout_thread: Any = None  # threading.Thread | None
     stderr_thread: Any = None  # threading.Thread | None
+    log_file: Any = None       # proc_logs.ProcessLogFile | None
 
     def __setattr__(self, name, value):
         # Preserve the historical str-assignment API for stdout/stderr:
@@ -250,6 +255,12 @@ def delete_process(d: "Daemon", process_name) -> None:
             stop_process(d, process_name)
         # ensure no stale psutil handle
         d.processes[process_name].ps_proc = None
+        # Close the on-disk log handle. The file itself is left in place
+        # for post-mortem; rotation will eventually age it out.
+        log_file = d.processes[process_name].log_file
+        if log_file is not None:
+            log_file.write_marker("deleted")
+            log_file.close()
         cleanup_cgroup(process_name)
         del d.processes[process_name]
         logging.info("Delete Process: Deleted process: %s", process_name)
@@ -320,6 +331,20 @@ def start_process(d: "Daemon", process_name) -> None:
     proc_info.stdout_lines = stdout_lines
     proc_info.stderr_lines = stderr_lines
 
+    # Open (or reuse) the on-disk log file. One file per process; both
+    # stdout and stderr are appended in chronological order. Disabled if
+    # the daemon config sets process_log_dir to falsy.
+    log_dir = getattr(d, "process_log_dir", None)
+    if log_dir and proc_info.log_file is None:
+        proc_info.log_file = open_process_log(
+            process_name,
+            log_dir=log_dir,
+            max_bytes=getattr(d, "process_log_max_bytes", 50 * 1024 * 1024),
+            backups=getattr(d, "process_log_backups", 3),
+        )
+    if proc_info.log_file is not None:
+        proc_info.log_file.write_marker(f"start cmd={exec_command!r}")
+
     work_dir = proc_info.work_dir
     if work_dir and not os.path.isdir(work_dir):
         error_msg = f"Working directory does not exist: {work_dir}"
@@ -350,11 +375,16 @@ def start_process(d: "Daemon", process_name) -> None:
         # Start threads to read stdout and stderr.
         # A single lock guards both lists so the drain in monitor_process
         # is always consistent with concurrent appends from the reader threads.
+        log_file = proc_info.log_file
         stdout_thread = threading.Thread(
-            target=stream_reader, args=(proc.stdout, stdout_lines, output_lock), daemon=True
+            target=stream_reader,
+            args=(proc.stdout, stdout_lines, output_lock, log_file),
+            daemon=True,
         )
         stderr_thread = threading.Thread(
-            target=stream_reader, args=(proc.stderr, stderr_lines, output_lock), daemon=True
+            target=stream_reader,
+            args=(proc.stderr, stderr_lines, output_lock, log_file),
+            daemon=True,
         )
         stdout_thread.start()
         stderr_thread.start()
@@ -637,6 +667,8 @@ def monitor_process(d: "Daemon", process_name) -> None:
             )
             proc_info.state = STATE_READY
             proc_info.restart_count = 0
+            if proc_info.log_file is not None:
+                proc_info.log_file.write_marker(f"exit code=0")
         else:
             logging.warning(
                 "Monitor Process: Process %s failed with exit code: %s",
@@ -644,6 +676,8 @@ def monitor_process(d: "Daemon", process_name) -> None:
                 exit_code,
             )
             proc_info.state = STATE_FAILED
+            if proc_info.log_file is not None:
+                proc_info.log_file.write_marker(f"exit code={exit_code}")
 
         # Wait for reader threads to finish so all pipe data is captured
         for tattr in ("stdout_thread", "stderr_thread"):
@@ -677,6 +711,13 @@ def monitor_process(d: "Daemon", process_name) -> None:
                 )
         elif exit_code != 0:
             proc_info.errors = f"Process exited with code {exit_code}."
+
+        # Forensic breadcrumb: separate file with last stderr + exit context.
+        if exit_code != 0 and proc_info.log_file is not None:
+            tail_stderr = stderr_content[-4096:] if stderr_content else ""
+            proc_info.log_file.write_crash_sidecar(
+                exit_code, proc_info.restart_count, tail_stderr
+            )
 
         # Auto-restart only on failure (non-zero exit), with exponential backoff
         if proc_info.auto_restart and exit_code != 0:

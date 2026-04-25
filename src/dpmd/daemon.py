@@ -88,6 +88,22 @@ class Daemon:
             or "/var/log/dpm/dpmd.log"
         )
 
+        # Per-process on-disk logs — separate from this daemon's own log.
+        # Set process_log_dir to "" (empty) in dpm.yaml to disable disk logging.
+        from dpmd.proc_logs import (
+            DEFAULT_BACKUPS,
+            DEFAULT_DIR,
+            DEFAULT_MAX_BYTES,
+        )
+        cfg_dir = self.config.get("process_log_dir", DEFAULT_DIR)
+        self.process_log_dir = cfg_dir if cfg_dir else None
+        self.process_log_max_bytes = int(
+            self.config.get("process_log_max_bytes", DEFAULT_MAX_BYTES)
+        )
+        self.process_log_backups = int(
+            self.config.get("process_log_backups", DEFAULT_BACKUPS)
+        )
+
         # Process persistence: when enabled, the daemon saves its process
         # registry to disk on every create/delete and reloads on startup.
         # Processes with auto_restart=True are started automatically on reload.

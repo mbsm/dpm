@@ -29,3 +29,13 @@ max_restarts: -1
 
 # Signal sent for graceful stop (SIGKILL escalation unchanged)
 stop_signal: "SIGINT"
+
+# Per-process on-disk log files. Each managed process gets one file at
+# <process_log_dir>/<name>.log; merged stdout+stderr in chronological
+# order. Rotated by size (process_log_max_bytes) up to process_log_backups
+# generations. Set process_log_dir to an empty string to disable disk
+# logging entirely (LCM streaming + ring buffer keep working).
+# These are separate from dpmd's own log at /var/log/dpm/dpmd.log.
+process_log_dir: /var/log/dpm/processes
+process_log_max_bytes: 52428800  # 50 MB
+process_log_backups: 3

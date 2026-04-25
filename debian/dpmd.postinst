@@ -16,8 +16,8 @@ case "$1" in
         done
 
         # Create log and data directories
-        mkdir -p /var/log/dpm
-        chown dpm:dpm /var/log/dpm
+        mkdir -p /var/log/dpm/processes
+        chown -R dpm:dpm /var/log/dpm
         mkdir -p /var/lib/dpm
         chown dpm:dpm /var/lib/dpm
 
