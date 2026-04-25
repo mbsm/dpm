@@ -142,6 +142,28 @@ class _OutBuf:
         self._total -= taken
         return "".join(parts)
 
+    def peek(self, n: int) -> str:
+        """Return up to *n* bytes from the front without removing them.
+
+        Mirrors :meth:`take` so callers can stage a publish and only commit
+        (via ``take(len(peeked))``) once the side-effect succeeded.
+        """
+        if not self._chunks or n <= 0:
+            return ""
+        parts: list = []
+        taken = 0
+        for chunk in self._chunks:
+            remaining = n - taken
+            if len(chunk) <= remaining:
+                parts.append(chunk)
+                taken += len(chunk)
+                if taken >= n:
+                    break
+            else:
+                parts.append(chunk[:remaining])
+                break
+        return "".join(parts)
+
     def replace(self, s: str) -> None:
         """Clear and set to a single chunk containing *s*."""
         self._chunks.clear()

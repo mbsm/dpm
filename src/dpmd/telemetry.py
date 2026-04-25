@@ -249,8 +249,10 @@ def publish_procs_outputs(d: "Daemon") -> None:
         if proc_info is None:
             continue
 
-        stdout_chunk = proc_info.stdout.take(MAX_OUTPUT_CHUNK)
-        stderr_chunk = proc_info.stderr.take(MAX_OUTPUT_CHUNK)
+        # Peek (don't drain) so a publish failure leaves the bytes in the
+        # ring buffer for the next cycle instead of silently losing them.
+        stdout_chunk = proc_info.stdout.peek(MAX_OUTPUT_CHUNK)
+        stderr_chunk = proc_info.stderr.peek(MAX_OUTPUT_CHUNK)
         if not stdout_chunk and not stderr_chunk:
             continue
 
@@ -260,7 +262,6 @@ def publish_procs_outputs(d: "Daemon") -> None:
         # can do without a more invasive plumbing change.
         content = stdout_chunk + stderr_chunk
         idx = d._live_chunk_index.get(process_name, 0)
-        d._live_chunk_index[process_name] = idx + 1
 
         msg = log_chunk_t()
         msg.protocol_version = DPM_PROTOCOL_VERSION
@@ -277,3 +278,9 @@ def publish_procs_outputs(d: "Daemon") -> None:
             logging.error("Failed to publish log chunk for %s: %s", process_name, e)
             d._handle_lcm_error(e)
             return  # stop publishing this cycle; LCM will be reinitialized
+
+        # Commit only on successful publish: drain the bytes we just sent
+        # and bump chunk_index so a follower sees a contiguous sequence.
+        proc_info.stdout.take(len(stdout_chunk))
+        proc_info.stderr.take(len(stderr_chunk))
+        d._live_chunk_index[process_name] = idx + 1
