@@ -184,6 +184,9 @@ def cmd_restart(client, args) -> int:
 
 
 def cmd_add(client, args) -> int:
+    if not wait_for_telemetry(client):
+        return _no_daemons()
+
     name, host = args.name, args.host
     client.create_proc(
         name, args.cmd, args.group, host, args.auto_restart, args.realtime,
@@ -193,13 +196,11 @@ def cmd_add(client, args) -> int:
         isolated=args.isolated,
     )
 
-    if wait_for_telemetry(client):
-        confirmed = wait_for_state(client, name, host, target="T", timeout=3.0)
-        if confirmed:
-            print(f"Created {name}@{host}")
-            return 0
-
-    print(f"Create command sent for {name}@{host}")
+    confirmed = wait_for_state(client, name, host, target="T", timeout=3.0)
+    if confirmed:
+        print(f"Created {name}@{host}")
+    else:
+        print(f"Create command sent for {name}@{host} (state not yet confirmed)")
     return 0
 
 
