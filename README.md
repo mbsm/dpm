@@ -66,7 +66,7 @@ dpm status                                      # hosts and processes
 dpm add camera@jet1 --cmd "cam-node" \
     -g perception --auto-restart                # register a process
 dpm start camera@jet1                           # run it
-dpm logs camera@jet1                            # stream its output
+dpm logs camera@jet1 --follow                   # stream its output
 dpm export snapshot.yaml                        # save current state
 ```
 
@@ -101,22 +101,6 @@ pip install -e ".[gui]"
 DPM_CONFIG=./dpm.yaml dpm-gui
 ```
 
-## Migration (pre-1.0 renames)
-
-If you are upgrading from an earlier checkout, note the following one-time
-renames (no compatibility shims are provided):
-
-- Binary: `dpm-agent` → `dpmd`.
-- Systemd unit: `dpm-agent.service` → `dpmd.service`.
-- Python class: `Supervisor` → `Client` (`from dpm import Client`).
-- CLI verbs: `create` → `add`, `delete` → `remove`, `save` → `export`, `load` → `import`.
-- LCM channel: `proc_outputs_channel` → `log_chunks_channel` (and the
-  `proc_output_t` type was replaced by `log_chunk_t`). The `dpm logs`
-  command now reads from on-disk per-process log files
-  (`/var/log/dpm/processes/<name>.log`) by default; pass `--follow` to
-  subscribe for live output. Live output is silent on the wire unless
-  a client is actively subscribed.
-
 ## Documentation
 
 - [CLI reference](docs/cli.md) — every `dpm` subcommand
@@ -146,8 +130,10 @@ src/
   dpmd/                # daemon — one process per host
     daemon.py          # lifecycle and state
     processes.py       # process start/stop/monitor
-    commands.py        # LCM command dispatch
-    telemetry.py       # publish host and process telemetry
+    commands.py        # LCM command dispatch (incl. read_log, subscribe_output)
+    telemetry.py       # host/process telemetry + on-disk log tail publisher
+    proc_logs.py       # per-process on-disk log file with size rotation
+    log_reader.py      # walks rotated log set for read_log responses
     cgroups.py         # cgroups v2 helpers
   dpm_msgs/            # generated LCM message bindings
 ```

@@ -18,10 +18,12 @@ Responsibilities:
 - Maintain a local registry of managed processes (specs + runtime state).
 - Execute actions: create, start, stop, delete.
 - Monitor process liveness and exit status.
+- Capture each process's merged stdout+stderr to `<process_log_dir>/<name>.log` (the single source of truth for output — see §9).
 - Periodically publish:
   - host telemetry (cpu/mem)
-  - process state
-  - process output
+  - process state snapshots (`host_procs_t`)
+- Publish process output (`log_chunk_t`) only for processes a client has actively subscribed to — silent-by-default on the wire.
+- Serve historical output to clients via the `read_log` RPC.
 
 Runtime environment:
 - Runs as a low-privilege service user.
@@ -63,7 +65,7 @@ The `state` field is the single source of truth for process lifecycle. The redun
 
 | Code | Name      | Meaning |
 |------|-----------|---------|
-| `T`  | Ready     | Created but not started, or cleanly stopped (exit 0 / graceful SIGTERM) |
+| `T`  | Ready     | Created but not started, or cleanly stopped (exit 0, or stopped by the configured `stop_signal` before the SIGKILL escalation) |
 | `R`  | Running   | Process is alive |
 | `F`  | Failed    | Non-zero exit, or failed to start |
 | `K`  | Killed    | Force-killed (SIGKILL after stop timeout) |
