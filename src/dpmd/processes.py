@@ -58,6 +58,25 @@ def stream_reader(stream, log_file) -> None:
         logging.error("Stream Reader: Error reading stream: %s", e)
 
 
+def _drain_readers(proc_info: "Proc") -> None:
+    """Join the stdout/stderr reader threads from a finished run.
+
+    The threads exit on their own when the child closes its pipe ends
+    (i.e., when it dies). After they exit, the parent-side stream
+    wrappers lose their last refs and GC closes the FDs. Caller MUST
+    ensure the child has exited (or been killed) before calling this —
+    otherwise the readers stay blocked in ``readline()`` and the FDs
+    leak. We deliberately do NOT close the streams here: closing a
+    BufferedReader from another thread blocks on the buffer lock that
+    the reader's ``readline()`` is holding.
+    """
+    for tattr in ("stdout_thread", "stderr_thread"):
+        t = getattr(proc_info, tattr, None)
+        if t is not None:
+            t.join(timeout=2.0)
+            setattr(proc_info, tattr, None)
+
+
 @dataclass
 class Proc:
     """All state for a single managed process.
@@ -195,11 +214,7 @@ def start_process(d: "Daemon", process_name) -> None:
 
     # Join any still-alive reader threads from a previous run so we don't
     # leak threads writing to the file handle on a manual restart.
-    for tattr in ("stdout_thread", "stderr_thread"):
-        t = getattr(proc_info, tattr, None)
-        if t is not None:
-            t.join(timeout=2.0)
-            setattr(proc_info, tattr, None)
+    _drain_readers(proc_info)
 
     logging.info(
         "Start Process: Starting process: %s with command: %s",
@@ -331,9 +346,26 @@ def start_process(d: "Daemon", process_name) -> None:
                 proc_info.errors = err_msg
 
     except (OSError, ValueError, psutil.Error) as e:
-        # Mark process as failed and store error
+        # If Popen succeeded but a later step in the try block threw,
+        # the child is still running and its pipes are still open. We
+        # would otherwise orphan both the process and the parent-side
+        # stdout/stderr FDs (readers stay blocked forever on a child
+        # that nothing in dpmd is tracking). Kill the orphan so its
+        # pipes close, readers see EOF, and FDs are released by GC.
         error_msg = f"Failed to start process {process_name}: {e}"
         logging.error("Start Process: %s", error_msg)
+        orphan = proc_info.proc
+        if orphan is not None and is_running(orphan):
+            try:
+                _kill_process_group(d, orphan.pid, signal.SIGKILL)
+                orphan.kill()
+            except (psutil.Error, OSError, ValueError):
+                pass
+            try:
+                orphan.wait(timeout=2)
+            except (psutil.Error, OSError, ValueError):
+                pass
+        _drain_readers(proc_info)
         proc_info.state = STATE_FAILED
         proc_info.errors = str(e)
         proc_info.proc = None
@@ -367,6 +399,7 @@ def stop_process(d: "Daemon", process_name) -> None:
             "Stop Process: Process %s (PID %s) already exited, updating state.",
             process_name, proc.pid,
         )
+        _drain_readers(proc_info)
         proc_info.proc = None
         proc_info.ps_proc = None
         proc_info.state = STATE_READY
@@ -421,6 +454,7 @@ def stop_process(d: "Daemon", process_name) -> None:
         proc_info.state = STATE_KILLED
 
     finally:
+        _drain_readers(proc_info)
         proc_info.proc = None
         proc_info.ps_proc = None
         cleanup_cgroup(process_name)
@@ -571,13 +605,10 @@ def monitor_process(d: "Daemon", process_name) -> None:
         if log_file is not None:
             log_file.write_marker(f"exit code={exit_code}")
 
-    # Wait for reader threads to drain the closed pipes; their writes
-    # land in log_file before we move on.
-    for tattr in ("stdout_thread", "stderr_thread"):
-        t = getattr(proc_info, tattr, None)
-        if t is not None:
-            t.join(timeout=2.0)
-            setattr(proc_info, tattr, None)
+    # Drain reader threads. The child's pipe ends already closed (it
+    # exited), so readers see EOF and exit on their own; the join here
+    # just confirms they're done before we move on.
+    _drain_readers(proc_info)
 
     # Forensic breadcrumb: a separate file with exit context plus the
     # last few KB of the on-disk log. Survives log rotation.
