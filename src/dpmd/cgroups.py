@@ -108,15 +108,32 @@ def cgroups_available() -> bool:
 
 
 def _parse_cpuset(cpuset: str) -> set[int]:
-    """Parse a cpuset string like '0,1,4-7' into a set of core IDs."""
-    cores = set()
+    """Parse a cpuset string like '0,1,4-7' into a set of core IDs.
+
+    Raises ValueError with the offending token included if the spec is malformed.
+    """
+    cores: set[int] = set()
     for part in cpuset.split(","):
         part = part.strip()
-        if "-" in part:
-            lo, hi = part.split("-", 1)
-            cores.update(range(int(lo), int(hi) + 1))
-        else:
-            cores.add(int(part))
+        if not part:
+            raise ValueError(f"invalid cpuset {cpuset!r}: empty token")
+        try:
+            if "-" in part:
+                lo, hi = part.split("-", 1)
+                lo_i, hi_i = int(lo), int(hi)
+                if hi_i < lo_i:
+                    raise ValueError(
+                        f"invalid cpuset {cpuset!r}: range {part!r} is reversed"
+                    )
+                cores.update(range(lo_i, hi_i + 1))
+            else:
+                cores.add(int(part))
+        except ValueError as e:
+            if str(e).startswith("invalid cpuset"):
+                raise
+            raise ValueError(
+                f"invalid cpuset {cpuset!r}: bad token {part!r}"
+            ) from e
     return cores
 
 
@@ -159,8 +176,10 @@ def setup_cgroup(
     os.makedirs(cgroup_dir, exist_ok=True)
 
     if cpuset:
+        # Parse up-front so malformed input fails loudly before we write
+        # anything to the kernel. Reuse the parsed set for overlap checks.
+        cores = _parse_cpuset(cpuset)
         if isolated:
-            cores = _parse_cpuset(cpuset)
             _check_overlap(name, cores)
             _isolated_cores[name] = cores
 

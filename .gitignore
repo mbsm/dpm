@@ -50,6 +50,7 @@ debian/*.debhelper
 debian/dpmd/
 debian/dpm-tools/
 debian/python3-dpm/
+deb/*.deb
 
 # Keep repository metadata tracked
 # .github/

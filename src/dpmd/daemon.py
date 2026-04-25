@@ -17,15 +17,10 @@ import yaml
 
 import lcm
 
-# Maximum bytes sent per process per publish cycle. Prevents a chatty process
-# from producing LCM messages too large to fragment reliably over UDP.
-MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
-
-# Maximum bytes buffered per process on the daemon side. Prevents unbounded
-# memory growth when a process produces output faster than the publish interval.
-MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB (matches client-side cap)
-
 from dpmd.cgroups import _resolve_cgroup_base
+# Re-export for backwards compatibility with callers that used
+# ``from dpmd.daemon import MAX_OUTPUT_CHUNK``.
+from dpmd.limits import MAX_OUTPUT_BUFFER, MAX_OUTPUT_CHUNK  # noqa: F401
 from dpmd.commands import command_handler
 from dpmd.processes import (
     _handle_signal,
@@ -269,16 +264,25 @@ class Daemon:
     # -----------------
     @staticmethod
     def _atomic_yaml_write(path: str, data) -> None:
-        """Write data to a YAML file atomically (temp + rename)."""
-        dir_path = os.path.dirname(path)
-        if dir_path:
-            os.makedirs(dir_path, exist_ok=True)
+        """Write data to a YAML file atomically (temp + rename).
+
+        Fsyncs both the file and the containing directory so the rename is
+        durable across a crash — without the dir fsync the new name can be
+        lost even though the file data is on disk.
+        """
+        dir_path = os.path.dirname(path) or "."
+        os.makedirs(dir_path, exist_ok=True)
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)
             f.flush()
             os.fsync(f.fileno())
         os.rename(tmp, path)
+        dir_fd = os.open(dir_path, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
     def _save_registry(self) -> None:
         """Save process definitions to disk (called on create/delete)."""

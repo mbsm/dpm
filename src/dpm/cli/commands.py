@@ -264,32 +264,26 @@ def cmd_export(client, args) -> int:
     return 0
 
 
-def cmd_start_all(client, args) -> int:
+def _broadcast_proc_action(client, verb: str, action_fn) -> int:
+    """Send *action_fn* to every (host, name) pair. Returns exit code."""
     if not wait_for_telemetry(client):
         return _no_daemons()
 
-    procs = client.procs
     count = 0
-    for (host, name) in sorted(procs.keys()):
-        client.start_proc(name, host)
+    for (host, name) in sorted(client.procs.keys()):
+        action_fn(name, host)
         count += 1
 
-    print(f"Start sent to {count} processes")
+    print(f"{verb} sent to {count} processes")
     return 0
+
+
+def cmd_start_all(client, args) -> int:
+    return _broadcast_proc_action(client, "Start", client.start_proc)
 
 
 def cmd_stop_all(client, args) -> int:
-    if not wait_for_telemetry(client):
-        return _no_daemons()
-
-    procs = client.procs
-    count = 0
-    for (host, name) in sorted(procs.keys()):
-        client.stop_proc(name, host)
-        count += 1
-
-    print(f"Stop sent to {count} processes")
-    return 0
+    return _broadcast_proc_action(client, "Stop", client.stop_proc)
 
 
 def cmd_set_persistence(client, args) -> int:
@@ -339,92 +333,45 @@ def cmd_move(client, args) -> int:
     if not wait_for_telemetry(client):
         return _no_daemons()
 
-    src_name, src_host = args.src_name, args.src_host
-    dst_name, dst_host = args.dst_name, args.dst_host
+    from dpm.operations import StdoutProgress, move_process
 
-    # Validate source exists
-    src_key = (src_host, src_name)
-    src_proc = client.procs.get(src_key)
-    if src_proc is None:
-        print(f"Process '{src_name}@{src_host}' not found.", file=sys.stderr)
+    ok, message = move_process(
+        client,
+        args.src_name, args.src_host,
+        args.dst_name, args.dst_host,
+        progress=StdoutProgress(),
+    )
+    if ok:
+        print(message)
+        return 0
+    print(message, file=sys.stderr)
+    return 1
+
+
+def _run_launch_script(client, path: str, reverse: bool) -> int:
+    from dpm.operations import StdoutProgress, parse_launch_file, run_launch
+
+    if not wait_for_telemetry(client):
+        return _no_daemons()
+
+    try:
+        script = parse_launch_file(path)
+    except (OSError, ValueError) as e:
+        print(f"Invalid launch file: {e}", file=sys.stderr)
         return 1
 
-    # Validate destination host is reachable
-    if dst_host not in client.hosts:
-        available = ", ".join(sorted(client.hosts.keys()))
-        print(f"Destination host '{dst_host}' not responding. Available: {available}",
-              file=sys.stderr)
-        return 1
-
-    # Check if destination already has a process with that name
-    if (dst_host, dst_name) in client.procs:
-        print(f"Process '{dst_name}@{dst_host}' already exists. Delete it first or use a different name.",
-              file=sys.stderr)
-        return 1
-
-    # Read the spec from the source process
-    from dpm.spec_io import extract_proc_spec
-    spec = extract_proc_spec(src_proc)
-    was_running = getattr(src_proc, "state", "") == "R"
-
-    label = f"{src_name}@{src_host} -> {dst_name}@{dst_host}"
-
-    # Step 1: Stop on source if running
-    if was_running:
-        print(f"Stopping {src_name}@{src_host}...")
-        client.stop_proc(src_name, src_host)
-        if not wait_for_state(client, src_name, src_host, not_target="R", timeout=5.0):
-            print(f"Failed to stop {src_name}@{src_host}. Move aborted.", file=sys.stderr)
-            return 1
-
-    # Step 2: Create on destination
-    print(f"Creating {dst_name}@{dst_host}...")
-    client.create_proc(dst_name, spec["exec_command"], spec["group"], dst_host,
-                           spec["auto_restart"], spec["realtime"],
-                           isolated=spec["isolated"], work_dir=spec["work_dir"],
-                           cpuset=spec["cpuset"], cpu_limit=spec["cpu_limit"],
-                           mem_limit=spec["mem_limit"])
-    wait_for_state(client, dst_name, dst_host, target="T", timeout=5.0)
-
-    # Verify it appeared
-    if (dst_host, dst_name) not in client.procs:
-        # Rollback: restart on source if it was running
-        print(f"Failed to create on {dst_host}. Rolling back...", file=sys.stderr)
-        if was_running:
-            client.start_proc(src_name, src_host)
-        return 1
-
-    # Step 3: Start on destination if source was running
-    if was_running:
-        print(f"Starting {dst_name}@{dst_host}...")
-        client.start_proc(dst_name, dst_host)
-        if not wait_for_state(client, dst_name, dst_host, target="R"):
-            print(f"Warning: start on {dst_host} not confirmed, but definition was created.", file=sys.stderr)
-
-    # Step 4: Delete from source
-    print(f"Removing {src_name}@{src_host}...")
-    client.del_proc(src_name, src_host)
-
-    print(f"Moved {label}")
-    return 0
+    ok, message = run_launch(client, script, reverse=reverse, progress=StdoutProgress())
+    if message:
+        print(f"\n{message}")
+    return 0 if ok else 1
 
 
 def cmd_launch(client, args) -> int:
-    from dpm.cli.launch import run_launch
-
-    if not wait_for_telemetry(client):
-        return _no_daemons()
-
-    return run_launch(client, args.path, reverse=False)
+    return _run_launch_script(client, args.path, reverse=False)
 
 
 def cmd_shutdown(client, args) -> int:
-    from dpm.cli.launch import run_launch
-
-    if not wait_for_telemetry(client):
-        return _no_daemons()
-
-    return run_launch(client, args.path, reverse=True)
+    return _run_launch_script(client, args.path, reverse=True)
 
 
 def cmd_logs(client, args) -> int:

@@ -10,13 +10,14 @@ except ImportError:
 import struct
 
 class host_info_t(object):
-    __slots__ = ["timestamp", "hostname", "ip", "cpus", "cpu_usage", "mem_total", "mem_used", "mem_free", "mem_usage", "network_sent", "network_recv", "uptime", "report_interval", "persist"]
+    __slots__ = ["protocol_version", "timestamp", "hostname", "ip", "cpus", "cpu_usage", "mem_total", "mem_used", "mem_free", "mem_usage", "network_sent", "network_recv", "uptime", "report_interval", "persist"]
 
-    __typenames__ = ["int64_t", "string", "string", "int32_t", "float", "float", "float", "float", "float", "float", "float", "int64_t", "float", "boolean"]
+    __typenames__ = ["int32_t", "int64_t", "string", "string", "int32_t", "float", "float", "float", "float", "float", "float", "float", "int64_t", "float", "boolean"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
+        self.protocol_version = 0
         self.timestamp = 0
         self.hostname = ""
         self.ip = ""
@@ -39,7 +40,7 @@ class host_info_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">q", self.timestamp))
+        buf.write(struct.pack(">iq", self.protocol_version, self.timestamp))
         __hostname_encoded = self.hostname.encode('utf-8')
         buf.write(struct.pack('>I', len(__hostname_encoded)+1))
         buf.write(__hostname_encoded)
@@ -62,7 +63,7 @@ class host_info_t(object):
 
     def _decode_one(buf):
         self = host_info_t()
-        self.timestamp = struct.unpack(">q", buf.read(8))[0]
+        self.protocol_version, self.timestamp = struct.unpack(">iq", buf.read(12))
         __hostname_len = struct.unpack('>I', buf.read(4))[0]
         self.hostname = buf.read(__hostname_len)[:-1].decode('utf-8', 'replace')
         __ip_len = struct.unpack('>I', buf.read(4))[0]
@@ -74,7 +75,7 @@ class host_info_t(object):
 
     def _get_hash_recursive(parents):
         if host_info_t in parents: return 0
-        tmphash = (0x9c07b917bc38992d) & 0xffffffffffffffff
+        tmphash = (0xe62297a9e5f899a3) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

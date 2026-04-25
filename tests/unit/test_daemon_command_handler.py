@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 
+from dpm.constants import DPM_PROTOCOL_VERSION
 from dpm_msgs import command_t
 from dpmd.commands import command_handler
 
@@ -11,6 +12,7 @@ from dpmd.commands import command_handler
 def _cmd(action, name="p1", group="grp", hostname="", exec_cmd="echo hi",
          auto_restart=False, realtime=False):
     msg = command_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.action = action
     msg.name = name
     msg.group = group
@@ -98,3 +100,62 @@ def test_routes_stop_group(agent):
 def test_unknown_action_does_not_raise(agent):
     """An unrecognised action should log a warning and not crash."""
     command_handler(agent, "ch", _cmd("fly_to_the_moon", hostname=agent.hostname))
+
+
+# ---------------------------------------------------------------------------
+# Seq-based dedup (fix #1: client-restart tolerance)
+# ---------------------------------------------------------------------------
+
+def _cmd_with_seq(action, seq, hostname="", name="p1"):
+    msg = command_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
+    msg.action = action
+    msg.name = name
+    msg.hostname = hostname
+    msg.group = ""
+    msg.exec_command = ""
+    msg.auto_restart = False
+    msg.realtime = False
+    msg.seq = seq
+    return msg.encode()
+
+
+def test_duplicate_seq_is_dropped(agent):
+    with patch("dpmd.commands.start_process") as mock:
+        command_handler(agent, "ch", _cmd_with_seq("start_process", 100, agent.hostname))
+        command_handler(agent, "ch", _cmd_with_seq("start_process", 100, agent.hostname))
+    assert mock.call_count == 1
+
+
+def test_older_seq_is_dropped(agent):
+    with patch("dpmd.commands.start_process") as mock:
+        command_handler(agent, "ch", _cmd_with_seq("start_process", 500, agent.hostname))
+        command_handler(agent, "ch", _cmd_with_seq("start_process", 499, agent.hostname))
+    assert mock.call_count == 1
+
+
+def test_command_with_mismatched_protocol_version_is_dropped(agent):
+    """A command with the wrong protocol_version must not reach the handler."""
+    msg = command_t()
+    msg.protocol_version = 9999  # not equal to DPM_PROTOCOL_VERSION
+    msg.action = "start_process"
+    msg.name = "p1"
+    msg.hostname = agent.hostname
+    msg.group = ""
+    msg.exec_command = ""
+    msg.auto_restart = False
+    msg.realtime = False
+    with patch("dpmd.commands.start_process") as mock:
+        command_handler(agent, "ch", msg.encode())
+    mock.assert_not_called()
+
+
+def test_large_seq_rollback_is_accepted_as_client_restart(agent):
+    """Simulate a client restart after correcting a clock that was ahead."""
+    from dpmd.commands import _SEQ_RESTART_THRESHOLD_USEC
+    high_seq = 10_000_000_000_000  # seq from client with skewed future clock
+    low_seq = high_seq - _SEQ_RESTART_THRESHOLD_USEC - 1  # > threshold below
+    with patch("dpmd.commands.start_process") as mock:
+        command_handler(agent, "ch", _cmd_with_seq("start_process", high_seq, agent.hostname))
+        command_handler(agent, "ch", _cmd_with_seq("start_process", low_seq, agent.hostname))
+    assert mock.call_count == 2  # second was accepted as restart, not dropped

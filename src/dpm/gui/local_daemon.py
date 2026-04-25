@@ -14,9 +14,19 @@ _last_spawned_proc = None
 def spawn_local_daemon(config_path: str = "/etc/dpm/dpm.yaml"):
     """Start a dpmd process in the background.
 
+    Raises RuntimeError if a prior spawn is still alive — the GUI only
+    tracks a single handle, so a second spawn without stopping the first
+    would leak it (unkillable from the UI).
+
     Returns (pid, logfile_path).
     """
     global _last_spawned_proc
+
+    if _last_spawned_proc is not None and _last_spawned_proc.poll() is None:
+        raise RuntimeError(
+            f"Local daemon already running (PID {_last_spawned_proc.pid}); "
+            "stop it before spawning another."
+        )
 
     logfile = os.path.join(tempfile.gettempdir(), "dpmd-local.log")
     env = dict(os.environ)

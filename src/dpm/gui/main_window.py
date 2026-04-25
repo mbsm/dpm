@@ -435,9 +435,9 @@ class MainWindow(QMainWindow):
 
         self.hosts_list = QListWidget()
         self.hosts_list.setObjectName("HostsList")
-        self.hosts_list.setViewMode(self.hosts_list.IconMode)
-        self.hosts_list.setResizeMode(self.hosts_list.Adjust)
-        self.hosts_list.setMovement(self.hosts_list.Static)
+        self.hosts_list.setViewMode(QListWidget.IconMode)
+        self.hosts_list.setResizeMode(QListWidget.Adjust)
+        self.hosts_list.setMovement(QListWidget.Static)
         self.hosts_list.setSpacing(10)
         self.hosts_list.setWordWrap(True)
         self.hosts_list.setViewportMargins(2, 2, 2, 2)
@@ -625,6 +625,13 @@ class MainWindow(QMainWindow):
         now = time.time()
         seen_hosts = set()
         all_procs = self.client.procs  # single snapshot for the whole loop
+
+        # Index procs by host once (O(P)) instead of scanning all procs per host
+        # inside the loop (O(H*P)). Matters on larger clusters.
+        procs_by_host: dict = {}
+        for (h, _n), p in all_procs.items():
+            procs_by_host.setdefault(h, []).append(p)
+
         for host, info in self.client.hosts.items():
             ts_us = getattr(info, "timestamp", 0) or 0
             try:
@@ -668,13 +675,10 @@ class MainWindow(QMainWindow):
             persist = bool(getattr(info, "persist", False))
             interval = float(getattr(info, "report_interval", 1.0) or 1.0)
 
-            # Count processes on this host (using cached snapshot)
-            host_procs = [(h, n) for (h, n), p in all_procs.items() if h == host]
+            # Count processes on this host (using pre-indexed snapshot)
+            host_procs = procs_by_host.get(host, [])
             total = len(host_procs)
-            running = sum(
-                1 for h, n in host_procs
-                if getattr(all_procs.get((h, n)), "state", "") == "R"
-            )
+            running = sum(1 for p in host_procs if getattr(p, "state", "") == "R")
 
             # Update content only
             card.set_data(
@@ -1027,51 +1031,24 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Move", "No other hosts available.")
             return
 
-        dst_host, ok = QInputDialog.getItem(
+        dst_host, accepted = QInputDialog.getItem(
             self, "Move Process",
             f"Move '{proc_name}' from {src_host} to:",
             available, 0, False,
         )
-        if not ok or not dst_host:
+        if not accepted or not dst_host:
             return
 
-        # Find the source proc to copy its spec
-        src_proc = None
-        for p in self.client.procs.values():
-            if p.name == proc_name and getattr(p, "hostname", "") == src_host:
-                src_proc = p
-                break
-        if src_proc is None:
-            QMessageBox.warning(self, "Warning", f"Process '{proc_name}@{src_host}' not found.")
-            return
+        from dpm.operations import move_process
 
-        try:
-            from dpm.spec_io import extract_proc_spec
-            spec = extract_proc_spec(src_proc)
-            was_running = getattr(src_proc, "state", "") == "R"
-
-            if was_running:
-                self.client.stop_proc(proc_name, src_host)
-
-            self.client.create_proc(
-                proc_name, spec["exec_command"], spec["group"], dst_host,
-                spec["auto_restart"], spec["realtime"],
-                isolated=spec["isolated"], work_dir=spec["work_dir"],
-                cpuset=spec["cpuset"], cpu_limit=spec["cpu_limit"],
-                mem_limit=spec["mem_limit"],
-            )
-
-            if was_running:
-                self.client.start_proc(proc_name, dst_host)
-
-            self.client.del_proc(proc_name, src_host)
-            self.refresh_processes_in_place()
-            QMessageBox.information(
-                self, "Move",
-                f"Moved {proc_name}: {src_host} → {dst_host}",
-            )
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Move failed: {e}")
+        ok, message = move_process(
+            self.client, proc_name, src_host, proc_name, dst_host,
+        )
+        self.refresh_processes_in_place()
+        if ok:
+            QMessageBox.information(self, "Move", message)
+        else:
+            QMessageBox.critical(self, "Move Failed", message)
 
     def new_process(self):
         dlg = ProcessDialog(self.client, None)  # creation mode
@@ -1300,27 +1277,25 @@ class MainWindow(QMainWindow):
         except (AttributeError, TypeError):
             return []
 
-    def _start_group(self, group_name: str):
+    def _apply_group_action(self, group_name: str, title: str, action_fn) -> None:
+        """Fan action_fn(group, host) out across every host that has procs in *group_name*."""
         procs = self._procs_in_group(group_name)
         if not procs:
-            QMessageBox.information(self, "Start All", f"No processes found in group '{group_name}'.")
+            QMessageBox.information(
+                self, title, f"No processes found in group '{group_name}'."
+            )
             return
         hosts = {getattr(p, "hostname", "") or "" for p in procs}
         for host in hosts:
             if host:
-                self.client.start_group(group_name, host)
+                action_fn(group_name, host)
         self.refresh_processes_in_place()
 
+    def _start_group(self, group_name: str):
+        self._apply_group_action(group_name, "Start All", self.client.start_group)
+
     def _stop_group(self, group_name: str):
-        procs = self._procs_in_group(group_name)
-        if not procs:
-            QMessageBox.information(self, "Stop All", f"No processes found in group '{group_name}'.")
-            return
-        hosts = {getattr(p, "hostname", "") or "" for p in procs}
-        for host in hosts:
-            if host:
-                self.client.stop_group(group_name, host)
-        self.refresh_processes_in_place()
+        self._apply_group_action(group_name, "Stop All", self.client.stop_group)
 
     def _view_group_outputs(self, group_name: str):
         procs = self._procs_in_group(group_name)
@@ -1414,7 +1389,7 @@ class MainWindow(QMainWindow):
         self._run_launch_file(reverse=True)
 
     def _run_launch_file(self, reverse: bool):
-        from dpm.cli.launch import parse_launch_file, resolve_waves
+        from dpm.operations import parse_launch_file
 
         mode = "Shutdown" if reverse else "Launch"
         fname, _ = QFileDialog.getOpenFileName(
@@ -1425,13 +1400,9 @@ class MainWindow(QMainWindow):
 
         try:
             script = parse_launch_file(fname)
-            waves = resolve_waves(script["groups"])
-        except Exception as e:
+        except (OSError, ValueError) as e:
             QMessageBox.critical(self, "Error", f"Invalid launch file: {e}")
             return
-
-        if reverse:
-            waves = list(reversed(waves))
 
         # Build progress dialog
         dlg = QDialog(self)
@@ -1445,19 +1416,31 @@ class MainWindow(QMainWindow):
         # Track result from worker thread via signals
         self._launch_result_error = False
         self._launch_result_text = ""
+        self._launch_progress_lines: list = []
 
-        # Connect signals to dialog updates (thread-safe via Qt event loop)
-        self._launch_text_changed.connect(dlg_label.setText)
+        # Append-mode progress: each info/warn emits, dialog accumulates.
+        def _on_progress(text):
+            self._launch_progress_lines.append(text)
+            # Trim old lines so the dialog doesn't grow without bound
+            if len(self._launch_progress_lines) > 40:
+                self._launch_progress_lines = self._launch_progress_lines[-40:]
+            dlg_label.setText(
+                f"{mode}: {script['name']}\n\n"
+                + "\n".join(self._launch_progress_lines)
+            )
+
         def _on_finished(is_error, result_text):
             self._launch_result_error = is_error
             self._launch_result_text = result_text
             dlg.accept()
+
+        self._launch_text_changed.connect(_on_progress)
         self._launch_finished.connect(_on_finished)
 
         # Start worker thread
         thread = threading.Thread(
             target=self._launch_worker,
-            args=(script, waves, reverse, mode),
+            args=(script, reverse),
             daemon=True,
         )
         thread.start()
@@ -1466,7 +1449,7 @@ class MainWindow(QMainWindow):
         dlg.exec_()
 
         # Disconnect signals to avoid stale references
-        self._launch_text_changed.disconnect(dlg_label.setText)
+        self._launch_text_changed.disconnect(_on_progress)
         self._launch_finished.disconnect(_on_finished)
 
         self.refresh_processes_in_place()
@@ -1478,73 +1461,23 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, mode, f"{mode} complete.")
 
-    def _launch_worker(self, script, waves, reverse, mode):
-        """Runs in a background thread — emits signals for thread-safe GUI updates."""
-        from dpm.cli.launch import (
-            _start_group, _stop_group,
-            _wait_group_running, _wait_group_stopped, _create_processes,
-        )
+    def _launch_worker(self, script, reverse):
+        """Runs in a background thread.
 
-        groups = script["groups"]
-        timeout = script["timeout"]
-        total_waves = len(waves)
-        name = script["name"]
+        Delegates to :func:`dpm.operations.run_launch` with a progress sink
+        that emits Qt signals. The signals route thread-safe updates back
+        to the dialog on the GUI thread.
+        """
+        from dpm.operations import CallbackProgress, run_launch
+
+        def emit(_level, msg):
+            self._launch_text_changed.emit(msg)
 
         try:
-            if not reverse and script["processes"]:
-                self._launch_text_changed.emit(f"{mode}: {name}\n\nCreating processes...")
-                errors = _create_processes(self.client, script["processes"])
-                if errors:
-                    self._launch_finished.emit(True, f"{errors} process(es) failed to create.")
-                    return
-                time.sleep(1)
-
-            failed_groups = []
-            for i, wave in enumerate(waves):
-                wave_label = ", ".join(wave)
-                lines = [f"{mode}: {name}\n"]
-                for j in range(i):
-                    prev_label = ", ".join(waves[j])
-                    lines.append(f"  Wave {j+1}/{total_waves}: {prev_label}  done")
-                lines.append(f"  Wave {i+1}/{total_waves}: {wave_label}  ...")
-                for j in range(i + 1, total_waves):
-                    next_label = ", ".join(waves[j])
-                    lines.append(f"  Wave {j+1}/{total_waves}: {next_label}")
-                self._launch_text_changed.emit("\n".join(lines))
-
-                if reverse:
-                    for g in wave:
-                        _stop_group(self.client, g)
-                    for g in wave:
-                        ok, failed = _wait_group_stopped(self.client, g, timeout)
-                        if not ok:
-                            failed_groups.append((g, failed))
-                else:
-                    for g in wave:
-                        _start_group(self.client, g)
-                    for g in wave:
-                        ok, failed = _wait_group_running(self.client, g, timeout)
-                        if not ok:
-                            dependents = []
-                            for later_wave in waves[i + 1:]:
-                                for lg in later_wave:
-                                    if g in groups[lg].get("requires", []):
-                                        dependents.append(lg)
-                            if dependents:
-                                self._launch_finished.emit(
-                                    True,
-                                    f"Group '{g}' failed to start.\n"
-                                    f"Not running: {', '.join(failed)}\n\n"
-                                    f"Required by: {', '.join(dependents)}"
-                                )
-                                return
-                            failed_groups.append((g, failed))
-
-            result = ""
-            if failed_groups:
-                details = "\n".join(f"  {g}: {', '.join(f)}" for g, f in failed_groups)
-                result = f"{mode} finished with warnings:\n{details}"
-            self._launch_finished.emit(False, result)
-
+            ok, message = run_launch(
+                self.client, script, reverse=reverse,
+                progress=CallbackProgress(emit),
+            )
+            self._launch_finished.emit(not ok, message if (not ok or message) else "")
         except Exception as e:
             self._launch_finished.emit(True, str(e))

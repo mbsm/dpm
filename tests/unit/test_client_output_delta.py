@@ -79,10 +79,12 @@ def test_delta_unknown_process_returns_empty(client):
 # ---------------------------------------------------------------------------
 
 def test_trim_via_handler_increments_generation(client):
+    from dpm.constants import DPM_PROTOCOL_VERSION
     from dpm_msgs import proc_output_t
 
     MAX_BYTES = 2 * 1024 * 1024
     msg = proc_output_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = 0
     msg.name = "p1"
     msg.hostname = "h1"

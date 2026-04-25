@@ -11,6 +11,7 @@ except ModuleNotFoundError as e:
         "Failed to import 'dpm_msgs'. Install the project via 'pip install -e .'."
     ) from e
 
+from dpm.constants import DPM_PROTOCOL_VERSION
 from dpmd.processes import (
     create_process,
     delete_process,
@@ -22,6 +23,14 @@ from dpmd.processes import (
 
 if TYPE_CHECKING:
     from dpmd.daemon import Daemon
+
+
+# Gap in command seq (microseconds) that's large enough to be interpreted
+# as a client restart rather than a late duplicate. The client seeds its
+# seq from wall-clock microseconds, so a jump backwards by more than this
+# threshold cannot happen within a single live client session and is
+# therefore safe to treat as a restart (or a clock correction).
+_SEQ_RESTART_THRESHOLD_USEC = 60_000_000  # 60 s
 
 
 # Dispatch: action -> (target, msg_attribute).
@@ -41,9 +50,25 @@ _CMD_DISPATCH = {
 }
 
 
+_logged_version_mismatch: dict = {}
+
+
 def command_handler(d: "Daemon", channel, data) -> None:
     """Handle incoming command messages."""
     msg = command_t.decode(data)
+
+    # Drop messages from peers on a different wire-protocol version.
+    # Logged once per (sender, version) pair to avoid flooding the journal.
+    if msg.protocol_version != DPM_PROTOCOL_VERSION:
+        key = (msg.hostname or "?", msg.protocol_version)
+        if key not in _logged_version_mismatch:
+            _logged_version_mismatch[key] = True
+            logging.warning(
+                "Dropping command with protocol_version=%d from %s "
+                "(expected %d).",
+                msg.protocol_version, key[0], DPM_PROTOCOL_VERSION,
+            )
+        return
 
     # Ignore commands not addressed to this host. An empty hostname is
     # treated as a broadcast (applies to all nodes).
@@ -51,13 +76,20 @@ def command_handler(d: "Daemon", channel, data) -> None:
         return
 
     # Drop duplicate or reordered UDP commands via monotonic seq.
-    # Accept seq==0 when last>0 as a client-restart signal.
+    # If seq jumps backwards by more than _SEQ_RESTART_THRESHOLD_USEC, treat
+    # it as a client restart or clock correction and accept. Keeps the daemon
+    # responsive if a client was started with a skewed clock and later fixed.
     dedup_key = (msg.hostname, msg.action, msg.name)
     with d._last_seq_lock:
         last = d._last_seq.get(dedup_key, -1)
-        if msg.seq <= last and not (msg.seq == 0 and last > 0):
+        if msg.seq <= last and (last - msg.seq) < _SEQ_RESTART_THRESHOLD_USEC:
             logging.debug("Dropping duplicate command seq=%d key=%s", msg.seq, dedup_key)
             return
+        if last >= 0 and msg.seq < last:
+            logging.info(
+                "Accepting seq rollback (client restart?) key=%s last=%d new=%d",
+                dedup_key, last, msg.seq,
+            )
         # Evict oldest entry (FIFO) if cap reached
         if dedup_key not in d._last_seq and len(d._last_seq) >= d._LAST_SEQ_MAX_KEYS:
             d._last_seq.popitem(last=False)

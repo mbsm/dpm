@@ -28,6 +28,8 @@ except ModuleNotFoundError as e:
         "  PYTHONPATH=src python -m dpm.gui.main\n"
     ) from e
 
+from dpm.constants import DPM_PROTOCOL_VERSION
+
 
 @dataclass
 class _ProcOutputState:
@@ -35,6 +37,26 @@ class _ProcOutputState:
     last_msg: Optional[proc_output_t] = None
     buf: str = ""
     gen: int = 0
+
+
+def _version_ok(msg, _logged: dict = {}) -> bool:
+    """Return True iff *msg* carries the expected protocol version.
+
+    Logs a single warning per (remote, version) pair to avoid log spam
+    from a mismatched fleet member that publishes at 1 Hz.
+    """
+    v = getattr(msg, "protocol_version", 0)
+    if v == DPM_PROTOCOL_VERSION:
+        return True
+    key = (getattr(msg, "hostname", "") or "?", v)
+    if key not in _logged:
+        _logged[key] = True
+        logging.warning(
+            "Dropping message with protocol_version=%d from %s (expected %d). "
+            "Upgrade/downgrade so all peers share a version.",
+            v, key[0], DPM_PROTOCOL_VERSION,
+        )
+    return False
 
 
 class Client:
@@ -93,6 +115,9 @@ class Client:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lcm_backoff_s = 0.25
+        # Deduplicates concurrent reconnect requests (publisher + subscriber
+        # may both detect an error on the same broken socket).
+        self._reconnecting = False
 
         self._init_lcm()
 
@@ -108,21 +133,35 @@ class Client:
         ])
 
     def _init_lcm(self) -> None:
-        """(Re)initialize LCM instances and subscriptions."""
-        for attr in ("lc_sub", "lc_pub"):
-            old = getattr(self, attr, None)
-            if old is not None:
-                try:
-                    old.close()
-                except Exception:
-                    pass
-        self.lc_sub = lcm.LCM(self.lc_url)
-        self.lc_pub = lcm.LCM(self.lc_url)
+        """(Re)initialize LCM instances and subscriptions.
 
-        # subscribe (owned by background thread)
-        self.lc_sub.subscribe(self.host_info_channel, self.host_info_handler)
-        self.lc_sub.subscribe(self.host_procs_channel, self.host_procs_handler)
-        self.lc_sub.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
+        Creates the new instances first, swaps them in atomically, then
+        briefly sleeps before closing the old ones. The grace period lets
+        any in-flight ``handle_timeout`` (up to 100 ms) finish on the old
+        subscriber without risking a use-after-free from the LCM C library.
+        Callers should hold ``self._lcm_lock`` (``__init__`` runs before
+        any thread starts, so the lock is optional there).
+        """
+        old_sub = getattr(self, "lc_sub", None)
+        old_pub = getattr(self, "lc_pub", None)
+
+        new_sub = lcm.LCM(self.lc_url)
+        new_pub = lcm.LCM(self.lc_url)
+        new_sub.subscribe(self.host_info_channel, self.host_info_handler)
+        new_sub.subscribe(self.host_procs_channel, self.host_procs_handler)
+        new_sub.subscribe(self.proc_outputs_channel, self.proc_outputs_handler)
+
+        self.lc_sub = new_sub
+        self.lc_pub = new_pub
+
+        if old_sub is not None or old_pub is not None:
+            time.sleep(0.15)  # > max handle_timeout (100 ms)
+            for old in (old_sub, old_pub):
+                if old is not None:
+                    try:
+                        old.close()
+                    except Exception:
+                        pass
 
         logging.info(
             "Client LCM initialized url=%s channels: cmd=%s host_info=%s host_procs=%s outputs=%s",
@@ -134,19 +173,28 @@ class Client:
         )
 
     def _reconnect_lcm(self, err: Exception) -> None:
-        logging.exception("Client LCM error: %s", err)
-        delay = self._lcm_backoff_s
-        logging.warning("Reinitializing Client LCM in %.2fs...", delay)
-        time.sleep(delay)
-        self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
-
+        """Reinitialize LCM after an error, deduping concurrent requests."""
         with self._lcm_lock:
-            try:
-                self._init_lcm()
-                self._lcm_backoff_s = 0.25
-                logging.info("Client LCM reinitialized successfully.")
-            except (OSError, RuntimeError) as e2:
-                logging.exception("Client LCM reinit failed: %s", e2)
+            if self._reconnecting:
+                logging.debug("Client LCM reconnect already in progress; skipping.")
+                return
+            self._reconnecting = True
+            delay = self._lcm_backoff_s
+            self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
+
+        logging.warning("Client LCM error (%s); reinitializing in %.2fs...", err, delay)
+        try:
+            time.sleep(delay)
+            with self._lcm_lock:
+                try:
+                    self._init_lcm()
+                    self._lcm_backoff_s = 0.25
+                    logging.info("Client LCM reinitialized successfully.")
+                except (OSError, RuntimeError) as e2:
+                    logging.error("Client LCM reinit failed: %s", e2)
+        finally:
+            with self._lcm_lock:
+                self._reconnecting = False
 
     # -----------------
     # LCM handlers (background thread)
@@ -156,6 +204,8 @@ class Client:
             msg = host_info_t.decode(data)
         except Exception as e:
             logging.error("host_info_handler: decode failed: %s", e)
+            return
+        if not _version_ok(msg):
             return
         with self._hosts_lock:
             self._hosts[msg.hostname] = msg
@@ -167,26 +217,49 @@ class Client:
         except Exception as e:
             logging.error("host_procs_handler: decode failed: %s", e)
             return
+        if not _version_ok(msg):
+            return
         hostname = msg.hostname
 
         # Update atomically under lock (avoid GUI races)
+        removed_names: set = set()
         with self._procs_lock:
             # remove old procs for this host that are not in the new set
             existing_names = self._procs_by_host.get(hostname, set())
             new_names = {p.name for p in msg.procs}
             for name in existing_names - new_names:
                 del self._procs[(hostname, name)]
+            removed_names = existing_names - new_names
 
             # upsert
             for p in msg.procs:
                 self._procs[(hostname, p.name)] = p
             self._procs_by_host[hostname] = new_names
 
+            # If a removed proc name doesn't exist on ANY other host, its
+            # output buffer can be freed. Checked here (under the procs
+            # lock) so we see a consistent view of which hosts own which
+            # names. Output-state lock is acquired in _maybe_evict.
+            evictable = {
+                n for n in removed_names
+                if not any(n in names for names in self._procs_by_host.values())
+            }
+        if evictable:
+            self._evict_proc_output_states(evictable)
+
+    def _evict_proc_output_states(self, names: set) -> None:
+        """Drop output buffers for proc names no longer present on any host."""
+        with self._outputs_lock:
+            for name in names:
+                self._proc_output_states.pop(name, None)
+
     def proc_outputs_handler(self, _channel, data) -> None:
         try:
             msg = proc_output_t.decode(data)
         except Exception as e:
             logging.error("proc_outputs_handler: decode failed: %s", e)
+            return
+        if not _version_ok(msg):
             return
         name = msg.name
 
@@ -275,17 +348,21 @@ class Client:
     def _publish(self, msg: command_t) -> None:
         if self.lc_pub is None:
             raise RuntimeError("LCM publisher not initialized.")
+        msg.protocol_version = DPM_PROTOCOL_VERSION
         msg.seq = self._cmd_seq
         self._cmd_seq += 1
+        # Encode once and reuse on retry — the payload is identical and
+        # encode() allocates a fresh bytes object each call.
+        encoded = msg.encode()
         try:
-            self.lc_pub.publish(self.command_channel, msg.encode())
+            self.lc_pub.publish(self.command_channel, encoded)
         except OSError as e:
             logging.error("Publish failed, reconnecting: %s", e)
             self._reconnect_lcm(e)
             # Retry once after reconnect
             try:
                 if self.lc_pub is not None:
-                    self.lc_pub.publish(self.command_channel, msg.encode())
+                    self.lc_pub.publish(self.command_channel, encoded)
             except (OSError, AttributeError) as e2:
                 logging.error("Publish retry also failed: %s", e2)
 
@@ -420,6 +497,7 @@ class Client:
     def _evict_stale_hosts(self) -> None:
         """Remove hosts that haven't reported within their expected interval."""
         now = time.monotonic()
+        evicted_names: set = set()
         # Hold both locks to maintain the invariant that _hosts and _procs
         # are consistent (no orphaned proc entries for evicted hosts).
         with self._hosts_lock, self._procs_lock:
@@ -434,16 +512,30 @@ class Client:
                 del self._host_last_seen[hostname]
                 for name in self._procs_by_host.pop(hostname, set()):
                     self._procs.pop((hostname, name), None)
+                    evicted_names.add(name)
                 logging.info("Client: evicted stale host %s", hostname)
+
+            # Only evict output state for names that no surviving host still owns
+            still_owned = {
+                n for names in self._procs_by_host.values() for n in names
+            }
+            evictable = evicted_names - still_owned
+        if evictable:
+            self._evict_proc_output_states(evictable)
 
     def _thread_func(self) -> None:
         evict_counter = 0
         while self._running:
-            if self.lc_sub is None:
+            # Snapshot the current subscriber so a concurrent reconnect that
+            # swaps self.lc_sub cannot yank our reference mid-call. _init_lcm
+            # keeps the old instance alive for > 100 ms after swap, which
+            # outlasts the handle_timeout below.
+            lc = self.lc_sub
+            if lc is None:
                 time.sleep(0.2)
                 continue
             try:
-                self.lc_sub.handle_timeout(100)
+                lc.handle_timeout(100)
             except OSError as e:
                 # Same failure class as the node: lcm_handle_timeout() returned -1
                 self._reconnect_lcm(e)

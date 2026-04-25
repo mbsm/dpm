@@ -23,10 +23,8 @@ def load_dpm_config(config_path: str, required_fields: List[str]) -> dict:
         raise ValueError(
             f"Error parsing YAML configuration file {config_path}: {e}"
         ) from e
-    except OSError as e:
-        raise RuntimeError(
-            f"Unexpected error loading configuration file {config_path}: {e}"
-        ) from e
+    # OSError from open() (TOCTOU against isfile/access, disk error, etc.)
+    # propagates as-is — callers already handle it alongside other IO errors.
 
     for field in required_fields:
         if field not in config:

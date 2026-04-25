@@ -74,35 +74,35 @@ def test_parse_launch_file_string_requires(tmp_path):
     assert script["groups"]["sensors"]["requires"] == ["core"]
 
 
-# --- _validate_graph ---
+# --- graph validation (via resolve_waves) ---
 
-def test_validate_graph_valid():
-    from dpm.cli.launch import _validate_graph
+def test_validate_group_refs_valid():
+    from dpm.cli.launch import _validate_group_refs
     groups = {
         "core": {"requires": [], "after": []},
         "sensors": {"requires": ["core"], "after": []},
         "ui": {"requires": [], "after": ["sensors"]},
     }
-    _validate_graph(groups)  # should not raise
+    _validate_group_refs(groups)  # should not raise
 
 
-def test_validate_graph_unknown_reference():
-    from dpm.cli.launch import _validate_graph
+def test_validate_group_refs_unknown_reference():
+    from dpm.cli.launch import _validate_group_refs
     groups = {
         "core": {"requires": ["nonexistent"], "after": []},
     }
     with pytest.raises(ValueError, match="unknown group"):
-        _validate_graph(groups)
+        _validate_group_refs(groups)
 
 
-def test_validate_graph_cycle():
-    from dpm.cli.launch import _validate_graph
+def test_resolve_waves_detects_cycle():
+    from dpm.cli.launch import resolve_waves
     groups = {
         "a": {"requires": ["b"], "after": []},
         "b": {"requires": ["a"], "after": []},
     }
     with pytest.raises(ValueError, match="[Cc]ycle"):
-        _validate_graph(groups)
+        resolve_waves(groups)
 
 
 # --- resolve_waves ---
@@ -246,7 +246,7 @@ def test_wait_group_running_success():
     proc = MagicMock()
     proc.group = "core"
     sup = _mock_client_with_procs({("h1", "svc"): proc})
-    with patch("dpm.cli.launch.wait_for_state", return_value=True):
+    with patch("dpm.operations.wait_for_state", return_value=True):
         ok, failed = _wait_group_running(sup, "core", timeout=5)
     assert ok is True
     assert failed == []
@@ -257,7 +257,7 @@ def test_wait_group_running_timeout():
     proc = MagicMock()
     proc.group = "core"
     sup = _mock_client_with_procs({("h1", "svc"): proc})
-    with patch("dpm.cli.launch.wait_for_state", return_value=False):
+    with patch("dpm.operations.wait_for_state", return_value=False):
         ok, failed = _wait_group_running(sup, "core", timeout=5)
     assert ok is False
     assert failed == ["svc@h1"]
@@ -268,7 +268,7 @@ def test_wait_group_stopped_success():
     proc = MagicMock()
     proc.group = "core"
     sup = _mock_client_with_procs({("h1", "svc"): proc})
-    with patch("dpm.cli.launch.wait_for_state", return_value=True):
+    with patch("dpm.operations.wait_for_state", return_value=True):
         ok, failed = _wait_group_stopped(sup, "core", timeout=5)
     assert ok is True
     assert failed == []

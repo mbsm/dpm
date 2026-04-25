@@ -10,6 +10,7 @@ import shlex
 import signal
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from subprocess import PIPE
 from typing import Any, TYPE_CHECKING
@@ -17,6 +18,7 @@ from typing import Any, TYPE_CHECKING
 import psutil
 
 from dpm.constants import (
+    DPM_PROTOCOL_VERSION,
     STATE_FAILED,
     STATE_KILLED,
     STATE_READY,
@@ -25,6 +27,7 @@ from dpm.constants import (
 )
 
 from dpmd.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
+from dpmd.limits import MAX_OUTPUT_BUFFER
 
 try:
     from dpm_msgs import proc_output_t
@@ -62,6 +65,96 @@ def stream_reader(stream, output_list, lock: threading.Lock) -> None:
         logging.error("Stream Reader: Error reading stream: %s", e)
 
 
+class _OutBuf:
+    """Chunked FIFO output buffer with a byte-count cap.
+
+    Append and take are O(1) amortized (no full-buffer copy). Supports the
+    same assertions the tests and existing callers rely on: ``len(buf)``,
+    ``bool(buf)``, and ``buf == "str"``.
+
+    Direct string assignment (``proc_info.stdout = "abc"``) is preserved
+    via ``Proc.__setattr__``, which forwards into ``replace()`` instead of
+    rebinding the attribute.
+    """
+
+    __slots__ = ("_chunks", "_total")
+
+    def __init__(self, initial: str = "") -> None:
+        self._chunks: deque = deque()
+        self._total: int = 0
+        if initial:
+            self._chunks.append(initial)
+            self._total = len(initial)
+
+    def __len__(self) -> int:
+        return self._total
+
+    def __bool__(self) -> bool:
+        return self._total > 0
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, str):
+            return "".join(self._chunks) == other
+        if isinstance(other, _OutBuf):
+            return "".join(self._chunks) == "".join(other._chunks)
+        return NotImplemented
+
+    def __contains__(self, item) -> bool:
+        # Supports ``"substr" in buf``. Joins chunks lazily only on demand.
+        return item in "".join(self._chunks)
+
+    def __str__(self) -> str:
+        return "".join(self._chunks)
+
+    def __repr__(self) -> str:
+        return f"_OutBuf(len={self._total})"
+
+    def append(self, new: str, max_size: int) -> None:
+        """Append *new*, trimming from the front so total stays ≤ max_size."""
+        if not new:
+            return
+        self._chunks.append(new)
+        self._total += len(new)
+        while self._total > max_size and self._chunks:
+            front = self._chunks[0]
+            excess = self._total - max_size
+            if len(front) <= excess:
+                self._chunks.popleft()
+                self._total -= len(front)
+            else:
+                self._chunks[0] = front[excess:]
+                self._total -= excess
+
+    def take(self, n: int) -> str:
+        """Pop up to *n* bytes from the front and return them as a string."""
+        if not self._chunks or n <= 0:
+            return ""
+        parts: list = []
+        taken = 0
+        while self._chunks and taken < n:
+            front = self._chunks[0]
+            remaining = n - taken
+            if len(front) <= remaining:
+                parts.append(front)
+                taken += len(front)
+                self._chunks.popleft()
+            else:
+                parts.append(front[:remaining])
+                self._chunks[0] = front[remaining:]
+                taken = n
+                break
+        self._total -= taken
+        return "".join(parts)
+
+    def replace(self, s: str) -> None:
+        """Clear and set to a single chunk containing *s*."""
+        self._chunks.clear()
+        self._total = 0
+        if s:
+            self._chunks.append(s)
+            self._total = len(s)
+
+
 @dataclass
 class Proc:
     """All state for a single managed process."""
@@ -77,8 +170,8 @@ class Proc:
     state: str = STATE_READY
     errors: str = ""
     exit_code: int = -1
-    stdout: str = ""
-    stderr: str = ""
+    stdout: _OutBuf = field(default_factory=_OutBuf)
+    stderr: _OutBuf = field(default_factory=_OutBuf)
     restart_count: int = 0
     last_restart_time: float = 0.0
     proc: Any = None       # psutil.Popen | None
@@ -88,6 +181,19 @@ class Proc:
     stderr_lines: list = field(default_factory=list)
     stdout_thread: Any = None  # threading.Thread | None
     stderr_thread: Any = None  # threading.Thread | None
+
+    def __setattr__(self, name, value):
+        # Preserve the historical str-assignment API for stdout/stderr:
+        # `proc_info.stdout = "x"` replaces the buffer contents in-place
+        # rather than swapping the _OutBuf instance out.
+        if name in ("stdout", "stderr") and isinstance(value, str):
+            existing = self.__dict__.get(name)
+            if isinstance(existing, _OutBuf):
+                existing.replace(value)
+                return
+            object.__setattr__(self, name, _OutBuf(value))
+            return
+        object.__setattr__(self, name, value)
 
 
 def create_process(
@@ -170,6 +276,17 @@ def start_process(d: "Daemon", process_name) -> None:
         logging.info(
             "Start Process: Clearing SUSPENDED state for %s.", process_name
         )
+
+    # Join any still-alive reader threads from a previous run before we
+    # reassign the output scaffolding below. If monitor_process hasn't
+    # reaped them yet (e.g., a manual restart right after a crash), a
+    # leftover reader could append to the old stdout_lines after we've
+    # swapped in a new list, mixing output between runs.
+    for tattr in ("stdout_thread", "stderr_thread"):
+        t = getattr(proc_info, tattr, None)
+        if t is not None:
+            t.join(timeout=2.0)
+            setattr(proc_info, tattr, None)
 
     # Clear any stale buffered output from a previous run so it isn't
     # re-published after restart and mixed with the new process's output.
@@ -256,14 +373,14 @@ def start_process(d: "Daemon", process_name) -> None:
                     "Start Process: Failed to set real-time priority for process %s: Permission denied.",
                     process_name,
                 )
-                d.processes[process_name].errors = "Permission denied setting real-time priority."
+                proc_info.errors = "Permission denied setting real-time priority."
             except (OSError, ValueError) as e:
                 logging.error(
                     "Start Process: Failed to set real-time priority for process %s: %s",
                     process_name,
                     e,
                 )
-                d.processes[process_name].errors = str(e)
+                proc_info.errors = str(e)
 
         # Apply cgroup resource limits (cpuset, CPU, memory, isolation)
         _cpuset = proc_info.cpuset
@@ -276,10 +393,12 @@ def start_process(d: "Daemon", process_name) -> None:
                              cpuset=_cpuset, cpu_limit=_cpu_limit,
                              mem_limit=_mem_limit, isolated=_isolated)
             except (OSError, ValueError) as e:
+                err_msg = f"cgroup setup failed: {e}"
                 logging.warning(
-                    "Start Process: cgroup setup failed for %s: %s (continuing without limits)",
-                    process_name, e,
+                    "Start Process: %s for %s (continuing without limits)",
+                    err_msg, process_name,
                 )
+                proc_info.errors = err_msg
 
     except (OSError, ValueError, psutil.Error) as e:
         # Mark process as failed and store error
@@ -292,6 +411,7 @@ def start_process(d: "Daemon", process_name) -> None:
         # Publish startup error to proc_outputs so GUI can show it
         try:
             msg = proc_output_t()
+            msg.protocol_version = DPM_PROTOCOL_VERSION
             msg.timestamp = int(time.time() * 1e6)
             msg.name = process_name
             msg.hostname = d.hostname
@@ -355,7 +475,18 @@ def stop_process(d: "Daemon", process_name) -> None:
             process_name,
             proc.pid,
         )
-        proc_info.exit_code = proc.returncode if proc.returncode is not None else 0
+        # Normalize the "killed by the signal we sent" case to exit code 0:
+        # a process that dies of SIGTERM/SIGINT returns -15/-2 from wait(),
+        # which reads like a crash to UI consumers. The stop was deliberate,
+        # so report success. Only spontaneous (!= our signal) exits keep
+        # their raw code.
+        rc = proc.returncode
+        if rc is None:
+            proc_info.exit_code = 0
+        elif rc < 0 and -rc == int(d.stop_signal):
+            proc_info.exit_code = 0
+        else:
+            proc_info.exit_code = rc
         proc_info.state = STATE_READY
 
     except psutil.TimeoutExpired:
@@ -517,6 +648,7 @@ def monitor_process(d: "Daemon", process_name) -> None:
             # Publish the captured output to LCM immediately
             try:
                 msg = proc_output_t()
+                msg.protocol_version = DPM_PROTOCOL_VERSION
                 msg.timestamp = int(time.time() * 1e6)
                 msg.name = process_name
                 msg.hostname = d.hostname
@@ -541,16 +673,9 @@ def monitor_process(d: "Daemon", process_name) -> None:
     # Still running: pull any accumulated stream output into stdout/stderr buffers
     stdout_content, stderr_content = _drain_output(d, proc_info)
     if stdout_content:
-        proc_info.stdout += stdout_content
+        proc_info.stdout.append(stdout_content, MAX_OUTPUT_BUFFER)
     if stderr_content:
-        proc_info.stderr += stderr_content
-
-    # Cap buffers to prevent unbounded memory growth
-    from dpmd.daemon import MAX_OUTPUT_BUFFER
-    if len(proc_info.stdout) > MAX_OUTPUT_BUFFER:
-        proc_info.stdout = proc_info.stdout[-MAX_OUTPUT_BUFFER:]
-    if len(proc_info.stderr) > MAX_OUTPUT_BUFFER:
-        proc_info.stderr = proc_info.stderr[-MAX_OUTPUT_BUFFER:]
+        proc_info.stderr.append(stderr_content, MAX_OUTPUT_BUFFER)
 
 
 def _group_matches(d: "Daemon", process_group: str, target_group: str | None) -> bool:

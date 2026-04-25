@@ -1,6 +1,10 @@
 package dpm_msgs;
 struct host_info_t
 {
+    // DPM wire-protocol version — consumers drop messages with a mismatching
+    // version. See dpm.constants.DPM_PROTOCOL_VERSION.
+    int32_t protocol_version;
+
     int64_t timestamp; // usecs from unix epoch
     string hostname;  // hostname
     string ip;    // primary IP address

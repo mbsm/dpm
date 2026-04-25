@@ -238,11 +238,12 @@ def main() -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Clean shutdown on SIGTERM (e.g. from pipelines)
-    def _sigterm(signum, frame):
-        client.stop()
-        sys.exit(0)
-    signal.signal(signal.SIGTERM, _sigterm)
+    # Map SIGTERM to the same path as Ctrl+C so the existing KeyboardInterrupt
+    # handling + finally cleanup runs on the main thread. A handler that calls
+    # client.stop() directly could deadlock if SIGTERM arrives on the LCM
+    # thread (self-join with timeout) and sys.exit from a signal handler
+    # skips the finally block.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
 
     try:
         rc = DISPATCH[args.command](client, args)

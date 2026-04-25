@@ -12,13 +12,14 @@ import struct
 import dpm_msgs.proc_info_t
 
 class host_procs_t(object):
-    __slots__ = ["timestamp", "hostname", "num_procs", "procs"]
+    __slots__ = ["protocol_version", "timestamp", "hostname", "num_procs", "procs"]
 
-    __typenames__ = ["int64_t", "string", "int32_t", "dpm_msgs.proc_info_t"]
+    __typenames__ = ["int32_t", "int64_t", "string", "int32_t", "dpm_msgs.proc_info_t"]
 
-    __dimensions__ = [None, None, None, ["num_procs"]]
+    __dimensions__ = [None, None, None, None, ["num_procs"]]
 
     def __init__(self):
+        self.protocol_version = 0
         self.timestamp = 0
         self.hostname = ""
         self.num_procs = 0
@@ -31,7 +32,7 @@ class host_procs_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">q", self.timestamp))
+        buf.write(struct.pack(">iq", self.protocol_version, self.timestamp))
         __hostname_encoded = self.hostname.encode('utf-8')
         buf.write(struct.pack('>I', len(__hostname_encoded)+1))
         buf.write(__hostname_encoded)
@@ -53,7 +54,7 @@ class host_procs_t(object):
 
     def _decode_one(buf):
         self = host_procs_t()
-        self.timestamp = struct.unpack(">q", buf.read(8))[0]
+        self.protocol_version, self.timestamp = struct.unpack(">iq", buf.read(12))
         __hostname_len = struct.unpack('>I', buf.read(4))[0]
         self.hostname = buf.read(__hostname_len)[:-1].decode('utf-8', 'replace')
         self.num_procs = struct.unpack(">i", buf.read(4))[0]
@@ -66,7 +67,7 @@ class host_procs_t(object):
     def _get_hash_recursive(parents):
         if host_procs_t in parents: return 0
         newparents = parents + [host_procs_t]
-        tmphash = (0x40e0393990ab6db5+ dpm_msgs.proc_info_t._get_hash_recursive(newparents)) & 0xffffffffffffffff
+        tmphash = (0x59427745c21ed9f2+ dpm_msgs.proc_info_t._get_hash_recursive(newparents)) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

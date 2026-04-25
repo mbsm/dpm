@@ -274,7 +274,7 @@ def test_start_all_sends_to_all_procs(mock_wait, client, capsys):
 # move
 # ---------------------------------------------------------------------------
 
-@patch("dpm.cli.commands.wait_for_state", return_value=True)
+@patch("dpm.operations.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
 def test_move_ready_process(mock_wait, mock_state, client, capsys):
     """Move a READY process: create on dest, delete from source."""
@@ -299,7 +299,7 @@ def test_move_ready_process(mock_wait, mock_state, client, capsys):
     assert "Moved" in capsys.readouterr().out
 
 
-@patch("dpm.cli.commands.wait_for_state", return_value=True)
+@patch("dpm.operations.wait_for_state", return_value=True)
 @patch("dpm.cli.commands.wait_for_telemetry", return_value=True)
 def test_move_running_process_stops_first(mock_wait, mock_state, client, capsys):
     """Move a RUNNING process: stop on source, create+start on dest, delete source."""

@@ -5,8 +5,8 @@ import threading
 
 import pytest
 
-from dpmd.daemon import MAX_OUTPUT_CHUNK
-from dpmd.processes import create_process, monitor_process, stream_reader
+from dpmd.daemon import MAX_OUTPUT_BUFFER, MAX_OUTPUT_CHUNK
+from dpmd.processes import _OutBuf, create_process, monitor_process, stream_reader
 from dpmd.telemetry import publish_procs_outputs
 from dpm.constants import STATE_RUNNING
 from dpm_msgs import proc_output_t
@@ -168,3 +168,119 @@ def test_monitor_process_skips_if_not_running(agent):
 
 def test_monitor_process_skips_unknown_name(agent):
     monitor_process(agent, "no_such_proc")
+
+
+# ---------------------------------------------------------------------------
+# _OutBuf — chunked FIFO semantics
+# ---------------------------------------------------------------------------
+
+def test_outbuf_append_and_take_roundtrips():
+    b = _OutBuf()
+    b.append("hello ", max_size=1024)
+    b.append("world", max_size=1024)
+    assert len(b) == 11
+    assert bool(b) is True
+    assert b.take(1024) == "hello world"
+    assert len(b) == 0
+    assert bool(b) is False
+
+
+def test_outbuf_take_splits_chunks():
+    b = _OutBuf()
+    b.append("abc", max_size=1024)
+    b.append("defgh", max_size=1024)
+    assert b.take(4) == "abcd"
+    assert len(b) == 4
+    assert b.take(10) == "efgh"
+    assert len(b) == 0
+
+
+def test_outbuf_append_caps_at_max_size():
+    b = _OutBuf()
+    b.append("x" * 100, max_size=80)
+    assert len(b) == 80
+    # only the trailing 80 bytes survive
+    assert b.take(80) == "x" * 80
+
+
+def test_outbuf_append_trims_old_front_chunks():
+    b = _OutBuf()
+    b.append("a" * 60, max_size=100)
+    b.append("b" * 60, max_size=100)
+    # 60 + 60 = 120; must trim to 100 from the front
+    assert len(b) == 100
+    result = b.take(100)
+    assert result.endswith("b" * 60)
+    assert "a" in result  # some of the older chunk remains
+    assert len(result) == 100
+
+
+def test_outbuf_str_assignment_preserves_buffer_identity():
+    """Proc.__setattr__ must replace contents in place, not swap the object."""
+    from dpmd.processes import Proc
+
+    p = Proc()
+    original_buf = p.stdout
+    p.stdout = "new content"
+    # Same _OutBuf instance, updated contents
+    assert p.stdout is original_buf
+    assert p.stdout == "new content"
+    p.stdout = ""
+    assert p.stdout == ""
+    assert len(p.stdout) == 0
+
+
+def test_publish_drains_large_buffer_without_rebuild(agent):
+    """Regression: large buffer draining should not rebuild the tail each cycle."""
+    big = "x" * (MAX_OUTPUT_CHUNK * 3 + 17)
+    _setup_proc(agent, stdout=big)
+    # Drain in three full chunks + a tail
+    publish_procs_outputs(agent)
+    publish_procs_outputs(agent)
+    publish_procs_outputs(agent)
+    assert len(agent.processes["p1"].stdout) == 17
+    publish_procs_outputs(agent)
+    assert agent.processes["p1"].stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# Reader thread join order on restart
+# ---------------------------------------------------------------------------
+
+def test_start_process_joins_stale_reader_threads(agent, monkeypatch):
+    """A restart with leftover reader threads must join them before spawning new ones."""
+    from unittest.mock import MagicMock
+    from dpmd.processes import start_process
+
+    create_process(agent, "p1", "cmd", False, False, "")
+
+    # Simulate leftover reader threads from a prior run
+    joined = {"stdout": False, "stderr": False}
+
+    class FakeThread:
+        def __init__(self, which):
+            self.which = which
+        def join(self, timeout=None):
+            joined[self.which] = True
+
+    agent.processes["p1"].stdout_thread = FakeThread("stdout")
+    agent.processes["p1"].stderr_thread = FakeThread("stderr")
+
+    # Prevent Popen from actually running a process
+    def fake_popen(*args, **kwargs):
+        m = MagicMock()
+        m.pid = 12345
+        m.stdout = io.StringIO("")
+        m.stderr = io.StringIO("")
+        return m
+    monkeypatch.setattr("dpmd.processes.psutil.Popen", fake_popen)
+    monkeypatch.setattr("dpmd.processes.psutil.Process", lambda pid: MagicMock())
+
+    start_process(agent, "p1")
+
+    assert joined["stdout"] is True
+    assert joined["stderr"] is True
+    # And the thread slots were cleared before the new threads were assigned
+    # (new threads are real threading.Thread instances from start_process).
+    new_t = agent.processes["p1"].stdout_thread
+    assert new_t is None or not isinstance(new_t, FakeThread)

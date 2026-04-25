@@ -10,13 +10,14 @@ except ImportError:
 import struct
 
 class proc_output_t(object):
-    __slots__ = ["timestamp", "name", "hostname", "group", "stdout", "stderr"]
+    __slots__ = ["protocol_version", "timestamp", "name", "hostname", "group", "stdout", "stderr"]
 
-    __typenames__ = ["int64_t", "string", "string", "string", "string", "string"]
+    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string"]
 
-    __dimensions__ = [None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None]
 
     def __init__(self):
+        self.protocol_version = 0
         self.timestamp = 0
         self.name = ""
         self.hostname = ""
@@ -31,7 +32,7 @@ class proc_output_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">q", self.timestamp))
+        buf.write(struct.pack(">iq", self.protocol_version, self.timestamp))
         __name_encoded = self.name.encode('utf-8')
         buf.write(struct.pack('>I', len(__name_encoded)+1))
         buf.write(__name_encoded)
@@ -65,7 +66,7 @@ class proc_output_t(object):
 
     def _decode_one(buf):
         self = proc_output_t()
-        self.timestamp = struct.unpack(">q", buf.read(8))[0]
+        self.protocol_version, self.timestamp = struct.unpack(">iq", buf.read(12))
         __name_len = struct.unpack('>I', buf.read(4))[0]
         self.name = buf.read(__name_len)[:-1].decode('utf-8', 'replace')
         __hostname_len = struct.unpack('>I', buf.read(4))[0]
@@ -81,7 +82,7 @@ class proc_output_t(object):
 
     def _get_hash_recursive(parents):
         if proc_output_t in parents: return 0
-        tmphash = (0x9569803e08ba9887) & 0xffffffffffffffff
+        tmphash = (0x21e5432ca478414) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

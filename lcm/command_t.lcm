@@ -2,6 +2,10 @@ package dpm_msgs;
 
 struct command_t
 {
+    // DPM wire-protocol version — peers drop messages whose protocol
+    // version doesn't match. See dpm.constants.DPM_PROTOCOL_VERSION.
+    int32_t protocol_version;
+
     // monotonically increasing sequence number for deduplication
     int64_t seq;
 

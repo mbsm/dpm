@@ -10,13 +10,14 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
+    __slots__ = ["protocol_version", "seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
 
-    __typenames__ = ["int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "boolean", "string", "string", "double", "int64_t"]
+    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "boolean", "string", "string", "double", "int64_t"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
+        self.protocol_version = 0
         self.seq = 0
         self.name = ""
         self.group = ""
@@ -38,7 +39,7 @@ class command_t(object):
         return buf.getvalue()
 
     def _encode_one(self, buf):
-        buf.write(struct.pack(">q", self.seq))
+        buf.write(struct.pack(">iq", self.protocol_version, self.seq))
         __name_encoded = self.name.encode('utf-8')
         buf.write(struct.pack('>I', len(__name_encoded)+1))
         buf.write(__name_encoded)
@@ -82,7 +83,7 @@ class command_t(object):
 
     def _decode_one(buf):
         self = command_t()
-        self.seq = struct.unpack(">q", buf.read(8))[0]
+        self.protocol_version, self.seq = struct.unpack(">iq", buf.read(12))
         __name_len = struct.unpack('>I', buf.read(4))[0]
         self.name = buf.read(__name_len)[:-1].decode('utf-8', 'replace')
         __group_len = struct.unpack('>I', buf.read(4))[0]
@@ -106,7 +107,7 @@ class command_t(object):
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0xbac8cf32f91134a6) & 0xffffffffffffffff
+        tmphash = (0x509c0673b4420ebc) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

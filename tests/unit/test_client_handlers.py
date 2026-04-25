@@ -5,6 +5,7 @@ import threading
 
 import pytest
 
+from dpm.constants import DPM_PROTOCOL_VERSION
 from dpm_msgs import host_info_t, host_procs_t, proc_info_t, proc_output_t
 
 
@@ -14,6 +15,7 @@ from dpm_msgs import host_info_t, host_procs_t, proc_info_t, proc_output_t
 
 def _host_info(hostname="host1", cpu=0.5):
     msg = host_info_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = int(time.time() * 1e6)
     msg.hostname = hostname
     msg.ip = "127.0.0.1"
@@ -53,6 +55,7 @@ def _proc_info(name, hostname="host1", state="R"):
 
 def _host_procs(hostname, procs):
     msg = host_procs_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = int(time.time() * 1e6)
     msg.hostname = hostname
     msg.num_procs = len(procs)
@@ -62,6 +65,7 @@ def _host_procs(hostname, procs):
 
 def _proc_output(name, stdout="", stderr="", hostname="host1"):
     msg = proc_output_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = int(time.time() * 1e6)
     msg.name = name
     msg.hostname = hostname
@@ -69,6 +73,31 @@ def _proc_output(name, stdout="", stderr="", hostname="host1"):
     msg.stdout = stdout
     msg.stderr = stderr
     return msg
+
+
+# ---------------------------------------------------------------------------
+# protocol-version checks
+
+
+def test_host_info_with_wrong_protocol_version_is_dropped(client):
+    msg = _host_info("h1")
+    msg.protocol_version = DPM_PROTOCOL_VERSION + 1
+    client.host_info_handler(None, msg.encode())
+    assert "h1" not in client.hosts
+
+
+def test_host_procs_with_wrong_protocol_version_is_dropped(client):
+    msg = _host_procs("h1", [_proc_info("p1")])
+    msg.protocol_version = DPM_PROTOCOL_VERSION + 1
+    client.host_procs_handler(None, msg.encode())
+    assert ("h1", "p1") not in client.procs
+
+
+def test_proc_output_with_wrong_protocol_version_is_dropped(client):
+    msg = _proc_output("p1", stdout="hello")
+    msg.protocol_version = DPM_PROTOCOL_VERSION + 1
+    client.proc_outputs_handler(None, msg.encode())
+    assert client.get_proc_output_last("p1") is None
 
 
 # ---------------------------------------------------------------------------

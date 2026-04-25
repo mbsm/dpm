@@ -61,6 +61,45 @@ def test_stop_signal_defaults_to_sigint(agent):
     assert agent.stop_signal == signal.SIGINT
 
 
+def test_graceful_stop_normalizes_signal_exit_code_to_zero(agent_with_sigint):
+    """A process killed by our stop signal should report exit code 0, not -signal."""
+    from dpmd.processes import create_process, stop_process
+    agent = agent_with_sigint
+    create_process(agent, "test", "sleep 999", False, False, "grp")
+
+    mock_proc = MagicMock()
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = None
+    # Simulate wait() returning because the process was killed by SIGINT (-2)
+    mock_proc.returncode = -int(signal.SIGINT)
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].state = "R"
+
+    with patch("dpmd.processes._kill_process_group", return_value=True):
+        stop_process(agent, "test")
+
+    assert agent.processes["test"].exit_code == 0
+
+
+def test_graceful_stop_preserves_non_signal_exit_code(agent_with_sigint):
+    """A process that exited with a non-zero code on its own keeps that code."""
+    from dpmd.processes import create_process, stop_process
+    agent = agent_with_sigint
+    create_process(agent, "test", "sleep 999", False, False, "grp")
+
+    mock_proc = MagicMock()
+    mock_proc.pid = 12345
+    mock_proc.poll.return_value = None
+    mock_proc.returncode = 42  # non-signal, non-zero exit
+    agent.processes["test"].proc = mock_proc
+    agent.processes["test"].state = "R"
+
+    with patch("dpmd.processes._kill_process_group", return_value=True):
+        stop_process(agent, "test")
+
+    assert agent.processes["test"].exit_code == 42
+
+
 def test_invalid_stop_signal_falls_back():
     """Invalid signal name falls back to SIGINT."""
     with patch("dpmd.daemon.lcm.LCM") as MockLCM:

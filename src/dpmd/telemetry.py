@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import psutil
 
-from dpm.constants import STATE_DISPLAY
+from dpm.constants import DPM_PROTOCOL_VERSION, STATE_DISPLAY
 
 try:
     from dpm_msgs import (
@@ -23,6 +23,7 @@ except ModuleNotFoundError as e:
         "Failed to import 'dpm_msgs'. Install the project via 'pip install -e .'."
     ) from e
 
+from dpmd.limits import MAX_OUTPUT_CHUNK
 from dpmd.processes import Proc, is_running
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ def publish_host_info(d: "Daemon") -> None:
     mem = psutil.virtual_memory()
 
     msg = host_info_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = int(time.time() * 1e6)
     # Refresh cached IP every 60 seconds
     now_mono = time.monotonic()
@@ -89,18 +91,21 @@ def publish_host_info(d: "Daemon") -> None:
         d._handle_lcm_error(e)
 
 
-def _htop_priority(d: "Daemon", pid: int) -> int:
+def _htop_priority(pid: int, p: psutil.Process) -> int:
     """
     Match htop/top PRI column:
       - RT tasks (SCHED_FIFO/RR): negative rtprio (e.g., -40)
       - Normal tasks: 20 + nice (nice=0 -> 20)
+
+    Takes the already-cached psutil.Process to avoid a per-tick constructor
+    hit on low-end hardware with many managed processes.
     """
     policy = os.sched_getscheduler(pid)
     if policy in (os.SCHED_FIFO, os.SCHED_RR):
         rtprio = int(os.sched_getparam(pid).sched_priority)
         return -rtprio
 
-    nice = int(psutil.Process(pid).nice())
+    nice = int(p.nice())
     return 20 + nice
 
 
@@ -154,7 +159,7 @@ def _fill_proc_metrics(
         msg_proc.mem_vms = 0
 
     try:
-        msg_proc.priority = int(_htop_priority(d, pid))
+        msg_proc.priority = int(_htop_priority(pid, p))
     except _exc:
         msg_proc.priority = 0
 
@@ -172,6 +177,7 @@ def _fill_proc_metrics(
 def publish_host_procs(d: "Daemon") -> None:
     """Publish process-level telemetry for all managed processes."""
     msg = host_procs_t()
+    msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.timestamp = int(time.time() * 1e6)
     msg.hostname = d.hostname
     msg.procs = []
@@ -215,18 +221,21 @@ def publish_procs_outputs(d: "Daemon") -> None:
 
     At most MAX_OUTPUT_CHUNK bytes are sent per stream per call; any
     remaining bytes stay in the buffer and are sent on the next cycle.
+
+    The per-proc buffer is a chunked FIFO (``_OutBuf``) so draining a
+    chunk never rebuilds the tail — publish is O(chunk_size), not O(buffer).
     """
-    from dpmd.daemon import MAX_OUTPUT_CHUNK
     for process_name, proc_info in d.processes.items():
-        stdout = proc_info.stdout
-        stderr = proc_info.stderr
-        if not stdout and not stderr:
+        stdout_buf = proc_info.stdout
+        stderr_buf = proc_info.stderr
+        if not stdout_buf and not stderr_buf:
             continue
 
-        stdout_chunk = stdout[:MAX_OUTPUT_CHUNK]
-        stderr_chunk = stderr[:MAX_OUTPUT_CHUNK]
+        stdout_chunk = stdout_buf.take(MAX_OUTPUT_CHUNK)
+        stderr_chunk = stderr_buf.take(MAX_OUTPUT_CHUNK)
 
         msg = proc_output_t()
+        msg.protocol_version = DPM_PROTOCOL_VERSION
         msg.timestamp = int(time.time() * 1e6)
         msg.name = process_name
         msg.hostname = d.hostname
@@ -239,6 +248,3 @@ def publish_procs_outputs(d: "Daemon") -> None:
             logging.error("Failed to publish proc output for %s: %s", process_name, e)
             d._handle_lcm_error(e)
             return  # stop publishing this cycle; LCM will be reinitialized
-
-        proc_info.stdout = stdout[len(stdout_chunk):]
-        proc_info.stderr = stderr[len(stderr_chunk):]
