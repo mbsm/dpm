@@ -104,7 +104,7 @@ def command_handler(d: "Daemon", channel, data) -> None:
             msg.name, msg.exec_command, msg.auto_restart, msg.realtime, msg.group,
             work_dir=msg.work_dir, cpuset=msg.cpuset,
             cpu_limit=msg.cpu_limit, mem_limit=msg.mem_limit,
-            isolated=msg.isolated,
+            isolated=msg.isolated, rt_priority=msg.rt_priority,
         )
     elif action in _CMD_DISPATCH:
         target, attr = _CMD_DISPATCH[action]

@@ -204,12 +204,14 @@ def test_add_calls_client(mock_wait, mock_state, client, capsys):
     args = argparse.Namespace(
         command="add", name="svc", host="jet1",
         cmd="echo hi", group="core", auto_restart=True, realtime=False,
+        rt_priority=0,
         isolated=False, work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
     )
     rc = commands.cmd_add(client, args)
     assert rc == 0
     client.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "jet1", True, False,
+        rt_priority=0,
         work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
         isolated=False,
     )
@@ -478,6 +480,7 @@ def test_add_forwards_new_fields_to_client():
     args.cpuset = "0,1"
     args.cpu_limit = 1.5
     args.mem_limit = 1073741824
+    args.rt_priority = 0
 
     with patch("dpm.cli.commands.wait_for_telemetry", return_value=True), \
          patch("dpm.cli.commands.wait_for_state", return_value=True):
@@ -485,6 +488,7 @@ def test_add_forwards_new_fields_to_client():
 
     mock_sup.create_proc.assert_called_once_with(
         "foo", "echo hi", "grp", "host1", False, False,
+        rt_priority=0,
         work_dir="/opt/robot", cpuset="0,1", cpu_limit=1.5, mem_limit=1073741824,
         isolated=False,
     )

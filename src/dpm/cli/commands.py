@@ -180,6 +180,7 @@ def cmd_add(client, args) -> int:
     name, host = args.name, args.host
     client.create_proc(
         name, args.cmd, args.group, host, args.auto_restart, args.realtime,
+        rt_priority=args.rt_priority,
         work_dir=args.work_dir, cpuset=args.cpuset,
         cpu_limit=args.cpu_limit, mem_limit=args.mem_limit,
         isolated=args.isolated,

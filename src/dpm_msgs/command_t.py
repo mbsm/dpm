@@ -10,11 +10,11 @@ except ImportError:
 import struct
 
 class command_t(object):
-    __slots__ = ["protocol_version", "seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
+    __slots__ = ["protocol_version", "seq", "name", "group", "hostname", "action", "exec_command", "auto_restart", "realtime", "rt_priority", "isolated", "work_dir", "cpuset", "cpu_limit", "mem_limit"]
 
-    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "boolean", "string", "string", "double", "int64_t"]
+    __typenames__ = ["int32_t", "int64_t", "string", "string", "string", "string", "string", "boolean", "boolean", "int32_t", "boolean", "string", "string", "double", "int64_t"]
 
-    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None]
+    __dimensions__ = [None, None, None, None, None, None, None, None, None, None, None, None, None, None, None]
 
     def __init__(self):
         self.protocol_version = 0
@@ -26,6 +26,7 @@ class command_t(object):
         self.exec_command = ""
         self.auto_restart = False
         self.realtime = False
+        self.rt_priority = 0
         self.isolated = False
         self.work_dir = ""
         self.cpuset = ""
@@ -60,7 +61,7 @@ class command_t(object):
         buf.write(struct.pack('>I', len(__exec_command_encoded)+1))
         buf.write(__exec_command_encoded)
         buf.write(b"\0")
-        buf.write(struct.pack(">bbb", self.auto_restart, self.realtime, self.isolated))
+        buf.write(struct.pack(">bbib", self.auto_restart, self.realtime, self.rt_priority, self.isolated))
         __work_dir_encoded = self.work_dir.encode('utf-8')
         buf.write(struct.pack('>I', len(__work_dir_encoded)+1))
         buf.write(__work_dir_encoded)
@@ -96,6 +97,7 @@ class command_t(object):
         self.exec_command = buf.read(__exec_command_len)[:-1].decode('utf-8', 'replace')
         self.auto_restart = bool(struct.unpack('b', buf.read(1))[0])
         self.realtime = bool(struct.unpack('b', buf.read(1))[0])
+        self.rt_priority = struct.unpack(">i", buf.read(4))[0]
         self.isolated = bool(struct.unpack('b', buf.read(1))[0])
         __work_dir_len = struct.unpack('>I', buf.read(4))[0]
         self.work_dir = buf.read(__work_dir_len)[:-1].decode('utf-8', 'replace')
@@ -107,7 +109,7 @@ class command_t(object):
 
     def _get_hash_recursive(parents):
         if command_t in parents: return 0
-        tmphash = (0x509c0673b4420ebc) & 0xffffffffffffffff
+        tmphash = (0x9a5c1fb54ab08679) & 0xffffffffffffffff
         tmphash  = (((tmphash<<1)&0xffffffffffffffff) + (tmphash>>63)) & 0xffffffffffffffff
         return tmphash
     _get_hash_recursive = staticmethod(_get_hash_recursive)

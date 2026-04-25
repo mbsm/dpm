@@ -27,8 +27,13 @@ struct command_t
     // auto restart flag
     boolean auto_restart;
 
-    // realtime priority flag
+    // realtime priority flag — when true the process is launched under
+    // SCHED_FIFO and given rt_priority (or the daemon-wide default if 0).
     boolean realtime;
+
+    // SCHED_FIFO priority in [1, 99]. 0 means "use the daemon-wide default
+    // from rt_priority in dpm.yaml". Ignored unless realtime=true.
+    int32_t rt_priority;
 
     // CPU isolation flag — when true with cpuset, cores are removed from the
     // general scheduler via cpuset.cpus.partition=isolated (cgroups v2)

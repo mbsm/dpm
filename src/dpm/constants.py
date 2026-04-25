@@ -6,7 +6,7 @@
 #
 # Pre-1.0: versions are numbered from 1. There is no compatibility
 # window — all daemons + clients must be upgraded in lockstep.
-DPM_PROTOCOL_VERSION = 1
+DPM_PROTOCOL_VERSION = 2
 
 # Process state codes — single source of truth for the lifecycle.
 #

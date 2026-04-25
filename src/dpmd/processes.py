@@ -161,6 +161,7 @@ class Proc:
     exec_command: str = ""
     auto_restart: bool = False
     realtime: bool = False
+    rt_priority: int = 0
     isolated: bool = False
     group: str = ""
     work_dir: str = ""
@@ -199,6 +200,7 @@ class Proc:
 def create_process(
     d: "Daemon", process_name, exec_command, auto_restart, realtime, group,
     work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0, isolated=False,
+    rt_priority=0,
 ) -> None:
     """Register a process definition without starting it."""
     existing = d.processes.get(process_name)
@@ -209,10 +211,20 @@ def create_process(
         )
         stop_process(d, process_name)
 
+    rt_prio = int(rt_priority)
+    if rt_prio and not (1 <= rt_prio <= 99):
+        # SCHED_FIFO range is 1..99 on Linux; 0 means "use daemon default".
+        logging.warning(
+            "Create Process: rt_priority %d for %s out of range [1,99]; clamping to default (0).",
+            rt_prio, process_name,
+        )
+        rt_prio = 0
+
     d.processes[process_name] = Proc(
         exec_command=exec_command,
         auto_restart=bool(auto_restart),
         realtime=bool(realtime),
+        rt_priority=rt_prio,
         isolated=bool(isolated),
         group=group,
         work_dir=work_dir,
@@ -221,11 +233,12 @@ def create_process(
         mem_limit=int(mem_limit),
     )
     logging.info(
-        "Create Process: Created process: %s with command: %s auto_restart: %s and realtime: %s",
+        "Create Process: Created process: %s with command: %s auto_restart: %s realtime: %s rt_priority: %s",
         process_name,
         exec_command,
         auto_restart,
         realtime,
+        rt_prio if rt_prio else "default",
     )
     d._save_registry()
 
@@ -361,7 +374,7 @@ def start_process(d: "Daemon", process_name) -> None:
 
         if realtime:
             try:
-                rt_prio = d.config.get("rt_priority", 40)
+                rt_prio = proc_info.rt_priority or d.config.get("rt_priority", 40)
                 os.sched_setscheduler(proc.pid, os.SCHED_FIFO, os.sched_param(rt_prio))
                 logging.info(
                     "Start Process: Set real-time priority for process: %s with PID %s",

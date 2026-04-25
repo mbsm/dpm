@@ -375,6 +375,7 @@ class Client:
         exec_command: str = "",
         auto_restart: bool = False,
         realtime: bool = False,
+        rt_priority: int = 0,
         isolated: bool = False,
         work_dir: str = "",
         cpuset: str = "",
@@ -389,6 +390,7 @@ class Client:
         msg.exec_command = exec_command
         msg.auto_restart = bool(auto_restart)
         msg.realtime = bool(realtime)
+        msg.rt_priority = int(rt_priority)
         msg.isolated = bool(isolated)
         msg.work_dir = work_dir
         msg.cpuset = cpuset
@@ -404,6 +406,7 @@ class Client:
         host: str,
         auto_restart: bool = False,
         realtime: bool = False,
+        rt_priority: int = 0,
         work_dir: str = "",
         cpuset: str = "",
         cpu_limit: float = 0.0,
@@ -412,6 +415,7 @@ class Client:
     ) -> None:
         self._send_command("create_process", name=cmd_name, hostname=host, group=group,
                            exec_command=proc_cmd, auto_restart=auto_restart, realtime=realtime,
+                           rt_priority=rt_priority,
                            isolated=isolated, work_dir=work_dir, cpuset=cpuset,
                            cpu_limit=cpu_limit, mem_limit=mem_limit)
 

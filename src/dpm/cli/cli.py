@@ -120,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_add.add_argument("-g", "--group", default="", help="Process group")
     p_add.add_argument("--auto-restart", action="store_true")
     p_add.add_argument("--realtime", action="store_true")
+    p_add.add_argument("--rt-priority", type=int, default=0,
+                       choices=range(0, 100), metavar="[1-99]",
+                       help="SCHED_FIFO priority (0 = use daemon default; requires --realtime)")
     p_add.add_argument("--isolated", action="store_true",
                        help="Isolate cpuset cores from general scheduler (requires --cpuset)")
     p_add.add_argument("--work-dir", default="", help="Working directory")

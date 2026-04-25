@@ -10,7 +10,7 @@ from dpmd.commands import command_handler
 
 
 def _cmd(action, name="p1", group="grp", hostname="", exec_cmd="echo hi",
-         auto_restart=False, realtime=False):
+         auto_restart=False, realtime=False, rt_priority=0):
     msg = command_t()
     msg.protocol_version = DPM_PROTOCOL_VERSION
     msg.action = action
@@ -20,6 +20,7 @@ def _cmd(action, name="p1", group="grp", hostname="", exec_cmd="echo hi",
     msg.exec_command = exec_cmd
     msg.auto_restart = auto_restart
     msg.realtime = realtime
+    msg.rt_priority = rt_priority
     return msg.encode()
 
 
@@ -60,7 +61,29 @@ def test_routes_create_process(agent):
         )
     mock.assert_called_once_with(agent, "p1", "sleep 1", True, False, "grp",
                                  work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0,
-                                 isolated=False)
+                                 isolated=False, rt_priority=0)
+
+
+def test_routes_create_process_with_rt_priority(agent):
+    """rt_priority on the command_t is plumbed through to create_process."""
+    with patch("dpmd.commands.create_process") as mock:
+        command_handler(
+            agent,
+            "ch",
+            _cmd("create_process", hostname=agent.hostname,
+                 exec_cmd="planner", auto_restart=False, realtime=True,
+                 rt_priority=80),
+        )
+    _, kwargs = mock.call_args
+    assert kwargs["rt_priority"] == 80
+
+
+def test_create_process_clamps_out_of_range_rt_priority(agent, caplog):
+    """rt_priority outside [1,99] is logged and clamped to 0 (use daemon default)."""
+    from dpmd.processes import create_process
+    create_process(agent, "p1", "cmd", False, True, "grp", rt_priority=120)
+    assert agent.processes["p1"].rt_priority == 0
+    assert any("out of range" in r.message for r in caplog.records)
 
 
 def test_routes_start_process(agent):

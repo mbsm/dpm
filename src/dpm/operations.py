@@ -84,6 +84,7 @@ def create_from_spec(client, spec: Dict[str, Any]) -> str:
         host,
         bool(spec.get("auto_restart", False)),
         bool(spec.get("realtime", False)),
+        rt_priority=int(spec.get("rt_priority", 0) or 0),
         work_dir=spec.get("work_dir", ""),
         cpuset=str(spec.get("cpuset", "")),
         cpu_limit=float(spec.get("cpu_limit", 0.0)),
@@ -144,6 +145,7 @@ def move_process(
     client.create_proc(
         dst_name, spec["exec_command"], spec["group"], dst_host,
         spec["auto_restart"], spec["realtime"],
+        rt_priority=int(spec.get("rt_priority", 0) or 0),
         isolated=spec["isolated"], work_dir=spec["work_dir"],
         cpuset=spec["cpuset"], cpu_limit=spec["cpu_limit"],
         mem_limit=spec["mem_limit"],
@@ -306,6 +308,7 @@ def _create_processes_from_script(
                 spec["host"],
                 bool(spec.get("auto_restart", False)),
                 bool(spec.get("realtime", False)),
+                rt_priority=int(spec.get("rt_priority", 0) or 0),
                 work_dir=spec.get("work_dir", ""),
                 cpuset=str(spec.get("cpuset", "")),
                 cpu_limit=float(spec.get("cpu_limit", 0.0)),

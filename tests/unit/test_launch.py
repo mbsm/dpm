@@ -169,6 +169,7 @@ def test_create_processes_success():
     assert errors == 0
     sup.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "h1", False, False,
+        rt_priority=0,
         work_dir="", cpuset="", cpu_limit=0.0, mem_limit=0, isolated=False,
     )
 
@@ -181,12 +182,14 @@ def test_create_processes_with_options():
             "name": "svc", "cmd": "echo hi", "host": "h1", "group": "core",
             "auto_restart": True, "realtime": True, "isolated": True,
             "work_dir": "/tmp", "cpuset": "0,1", "cpu_limit": 1.5, "mem_limit": 1024,
+            "rt_priority": 70,
         },
     ]
     errors = _create_processes(sup, procs)
     assert errors == 0
     sup.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "h1", True, True,
+        rt_priority=70,
         work_dir="/tmp", cpuset="0,1", cpu_limit=1.5, mem_limit=1024, isolated=True,
     )
 

@@ -22,6 +22,7 @@ def extract_proc_spec(proc) -> Dict[str, Any]:
         "group": getattr(proc, "group", "") or "",
         "auto_restart": bool(getattr(proc, "auto_restart", False)),
         "realtime": bool(getattr(proc, "realtime", False)),
+        "rt_priority": int(getattr(proc, "rt_priority", 0) or 0),
         "isolated": bool(getattr(proc, "isolated", False)),
         "work_dir": getattr(proc, "work_dir", "") or "",
         "cpuset": getattr(proc, "cpuset", "") or "",
@@ -107,10 +108,12 @@ def load_and_create(
             group = spec.get("group", "")
             auto_restart = bool(spec.get("auto_restart", False))
             realtime = bool(spec.get("realtime", False))
+            rt_priority = int(spec.get("rt_priority", 0) or 0)
             isolated = bool(spec.get("isolated", False))
 
             client.create_proc(
                 name, exec_command, group, host, auto_restart, realtime,
+                rt_priority=rt_priority,
                 work_dir=spec.get("work_dir", ""),
                 cpuset=str(spec.get("cpuset", "")),
                 cpu_limit=float(spec.get("cpu_limit", 0.0)),
