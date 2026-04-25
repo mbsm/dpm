@@ -48,7 +48,7 @@ Removal: `apt remove dpmd` stops and disables the service. `apt purge dpmd` also
 
 | Direction | Message | Channel | Content |
 |-----------|---------|---------|---------|
-| Client → Daemon | `command_t` | `command_channel` | Process commands with seq-based UDP dedup |
+| Client → Daemon | `command_t` | `command_channel` | Process commands (incl. `read_log`, `subscribe_output`); seq-based UDP dedup |
 | Daemon → Client | `host_info_t` | `host_info_channel` | Host telemetry (CPU, memory, network) |
-| Daemon → Client | `host_procs_t` | `host_procs_channel` | Process table snapshot |
-| Daemon → Client | `proc_output_t` | `proc_outputs_channel` | stdout/stderr chunks |
+| Daemon → Client | `host_procs_t` | `host_procs_channel` | Process table snapshot (embeds `proc_info_t` per process) |
+| Daemon → Client | `log_chunk_t`  | `log_chunks_channel` | Process output chunks. `request_seq=0` = unsolicited live tail (gated on active `subscribe_output`); `request_seq!=0` = `read_log` response with `last=True` on the final chunk |

@@ -41,14 +41,19 @@ Responsibilities:
 ## 3. LCM message model (current)
 
 Current messages (LCM types):
-- `command_t`: GUI → Daemon (requests an action)
-- `host_info_t`: Daemon → GUI (host telemetry)
-- `host_procs_t`: Daemon → GUI (process table snapshot)
-- `proc_output_t`: Daemon → GUI (stdout/stderr chunks)
+- `command_t`: client → daemon (request an action; also carries `read_log` and `subscribe_output`)
+- `host_info_t`: daemon → client (host telemetry)
+- `host_procs_t`: daemon → client (process table snapshot, embeds `proc_info_t` per process)
+- `log_chunk_t`: daemon → client (process output, on the `log_chunks_channel`)
 - `proc_info_t`: embedded inside `host_procs_t`
 
-Current behavior:
-- GUI infers command success by observing subsequent `host_procs_t` updates and/or output.
+`log_chunk_t` is used in two distinct modes, distinguished by `request_seq`:
+- `request_seq == 0` — unsolicited live publishing for processes with an active subscription.
+- `request_seq != 0` — response to a `read_log` RPC; chunks are sequenced by `chunk_index` and the final one carries `last=True`.
+
+Behavior:
+- The client infers command success by observing subsequent `host_procs_t` updates and/or output.
+- Output is silent-by-default on the wire: the daemon only publishes `log_chunk_t` for processes that a client has actively subscribed to (`subscribe_output` with a short TTL).
 
 ## 4. Process State Machine
 
@@ -218,4 +223,82 @@ GUI logic becomes:
 ### 8.3 Bandwidth minimization guidelines
 - Limit `proc_event_t.message` length (e.g., <= 256 bytes).
 - Do **not** embed full stdout/stderr in ACK messages.
-- Keep `proc_output_t` separate and rate-limited (or provide on-demand output later).
+- Keep `log_chunk_t` separate and rate-limited (or provide on-demand output later).
+
+## 9. Output pipeline
+
+Process output (merged stdout+stderr) is captured at one place — the
+on-disk per-process log file — and delivered to consumers from there.
+There is no in-memory buffer.
+
+### 9.1 Capture
+
+When a process starts, two reader threads (one per pipe) call
+`stream_reader`, which writes each line directly to
+`<process_log_dir>/<name>.log` via `ProcessLogFile.write`. The writer
+serializes concurrent calls with its own lock so lines from the two
+streams never interleave mid-line. The same file also receives
+daemon-emitted **marker lines** for lifecycle events:
+
+```
+--- 2026-04-25T14:02:11+00:00 start cmd='./robot --mode safe' ---
+hello world
+--- 2026-04-25T14:02:14+00:00 warning: cgroup setup failed: ... ---
+i am still running
+--- 2026-04-25T14:02:30+00:00 exit code=139 ---
+```
+
+So `cat <name>.log` reads exactly like the operator's terminal would
+have, including pre-launch reasons, runtime warnings, and the final
+exit cause.
+
+### 9.2 Live delivery
+
+`publish_procs_outputs` runs on `output_interval` and tails the disk
+file for each process that has an active `subscribe_output` entry
+(short TTL; renewed by clients while they're watching). Per-subscription
+state is just `(byte_offset, inode)`:
+
+- On the first cycle after a fresh subscribe the offset is anchored at
+  current EOF — new subscribers see only what arrives from this point
+  forward (silent-by-default).
+- On each subsequent cycle the daemon reads up to `MAX_OUTPUT_CHUNK`
+  bytes, trims to the last newline (no half-lines on the wire), and
+  publishes a `log_chunk_t` with `request_seq = 0`.
+- The offset is committed only after a successful publish — a transient
+  LCM error doesn't lose bytes.
+- An inode change (size shrinkage, log rotation) resets the offset to
+  zero of the new inode and re-tails from there.
+
+### 9.3 Historical access
+
+`read_log` (a request-response RPC) walks the rotated set
+(`<name>.log`, `<name>.log.1`, …) oldest-to-newest and returns the
+content as one or more `log_chunk_t` messages with `request_seq` echoing
+the request and `last=True` on the final piece. Optional filters:
+`since_us` (drops files whose mtime predates the bound) and
+`tail_lines` (returns only the newest N lines).
+
+The CLI (`dpm logs <name>`) and the GUI viewer both seed from `read_log`
+and then optionally subscribe for follow.
+
+### 9.4 Status summary
+
+`proc_info_t.errors` carries a short, human-readable status string
+(≤ 200 chars) — never log content. It answers "why is this process not
+RUNNING (or what's the most recent issue)?" Examples:
+
+- `"Working directory does not exist: /opt/foo"` (pre-launch)
+- `"Permission denied setting real-time priority."` (warning while RUNNING)
+- `"exit 139 (SIGSEGV)"` (post-exit summary)
+
+The status table reads `errors` directly. The full output and the
+matching marker lines live on disk.
+
+### 9.5 Forensic breadcrumb
+
+On any non-zero exit the daemon also appends a short record to
+`<name>.log.crash` (separate file, never rotated): timestamp, exit
+code, restart count, and the last 4 KB read back from the live log.
+Useful for "what was the last thing this process said before it died,
+six rotations ago?".

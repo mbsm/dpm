@@ -8,8 +8,15 @@ The `dpm` command is a scriptable interface for headless servers and automation.
 dpm status                              # all hosts and processes
 dpm status @jet1                        # filter to one host
 dpm hosts                               # hosts only
-dpm logs camera@jet1                    # stream output (Ctrl+C to stop)
+dpm logs camera@jet1                    # print on-disk history (default: tail)
+dpm logs camera@jet1 --follow           # also stream new output (Ctrl+C to stop)
+dpm logs camera@jet1 --persistent       # walk rotated history (no tail cap)
 ```
+
+`dpm logs` reads the per-process log file at
+`<process_log_dir>/<name>.log` (rotated on size). With `--follow` it
+also subscribes for live output; the live channel is silent on the
+wire unless an active subscription exists.
 
 ## Process control
 
