@@ -192,8 +192,19 @@ def handle_subscribe_output(d: "Daemon", msg) -> None:
     if is_fresh:
         proc_info = d.processes.get(msg.name)
         if proc_info is not None:
-            # Discard whatever's already buffered; new content from this
-            # point on will reach the client.
+            # Discard whatever's already buffered. There are two layers:
+            #   (a) per-line accumulators (stdout_lines/stderr_lines) that the
+            #       reader threads write to in real time;
+            #   (b) the ring buffer (proc_info.stdout/stderr) that monitor_process
+            #       drains those lists into at monitor_interval.
+            # Both must be cleared, otherwise the next monitor cycle would
+            # promote stale lines into the ring and they'd land on the wire
+            # alongside genuinely-new content.
+            output_lock = getattr(proc_info, "output_lock", None)
+            if output_lock is not None:
+                with output_lock:
+                    proc_info.stdout_lines.clear()
+                    proc_info.stderr_lines.clear()
             proc_info.stdout.take(len(proc_info.stdout))
             proc_info.stderr.take(len(proc_info.stderr))
 

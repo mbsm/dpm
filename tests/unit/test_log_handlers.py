@@ -150,21 +150,30 @@ def test_subscribe_output_extends_existing_subscription(agent):
     assert second > first
 
 
-def test_first_subscribe_drains_ring_buffer(agent):
-    """A fresh subscribe discards already-buffered content so --follow doesn't
-    re-deliver lines the client already pulled via read_log."""
+def test_first_subscribe_drains_ring_buffer_and_line_lists(agent):
+    """A fresh subscribe discards content from BOTH staging layers so that
+    a follow-up subscription doesn't re-publish lines the client already
+    has from a preceding read_log seed."""
+    import threading
     from dpmd.commands import command_handler
     from dpmd.processes import create_process
 
     create_process(agent, "p1", "cmd", False, False, "")
-    agent.processes["p1"].stdout = "old1\nold2\n"
-    agent.processes["p1"].stderr = "olderr\n"
+    p = agent.processes["p1"]
+    p.stdout = "old1\nold2\n"
+    p.stderr = "olderr\n"
+    # Per-line accumulators that reader threads write to before
+    # monitor_process drains them into the ring.
+    p.output_lock = threading.Lock()
+    p.stdout_lines = ["staged1\n", "staged2\n"]
+    p.stderr_lines = ["staged_err\n"]
 
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=5).encode())
 
-    # Buffers were drained on first subscribe.
-    assert len(agent.processes["p1"].stdout) == 0
-    assert len(agent.processes["p1"].stderr) == 0
+    assert len(p.stdout) == 0
+    assert len(p.stderr) == 0
+    assert p.stdout_lines == []
+    assert p.stderr_lines == []
 
 
 def test_subscribe_renewal_does_not_drain_ring_buffer(agent):
