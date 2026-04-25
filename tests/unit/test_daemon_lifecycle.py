@@ -22,8 +22,6 @@ def test_create_sets_initial_state(agent):
     assert p.state == STATE_READY
     assert p.proc is None
     assert p.exit_code == -1
-    assert p.stdout == ""
-    assert p.stderr == ""
     assert p.errors == ""
     assert p.restart_count == 0
 
@@ -37,13 +35,13 @@ def test_create_stores_metadata(agent):
     assert p.group == "mygroup"
 
 
-def test_create_defaults_output_fields(agent):
-    """output_lock defaults to None; stdout_lines/stderr_lines default to empty lists."""
+def test_create_defaults_log_file_to_none(agent):
+    """log_file is opened lazily by start_process, not at create time."""
     create_process(agent, "p1", "cmd", False, False, "")
     p = agent.processes["p1"]
-    assert p.output_lock is None
-    assert p.stdout_lines == []
-    assert p.stderr_lines == []
+    assert p.log_file is None
+    assert p.stdout_thread is None
+    assert p.stderr_thread is None
 
 
 def test_create_overwrites_existing_entry(agent):

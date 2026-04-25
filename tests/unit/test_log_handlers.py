@@ -150,61 +150,51 @@ def test_subscribe_output_extends_existing_subscription(agent):
     assert second > first
 
 
-def test_first_subscribe_drains_ring_buffer_and_line_lists(agent):
-    """A fresh subscribe discards content from BOTH staging layers so that
-    a follow-up subscription doesn't re-publish lines the client already
-    has from a preceding read_log seed."""
-    import threading
+def test_first_subscribe_clears_tail_offset(agent):
+    """A fresh subscribe drops any stale tail offset so the next publish
+    cycle re-anchors at current EOF — a client that has just seeded its
+    view via read_log won't see those bytes re-published on follow."""
     from dpmd.commands import command_handler
     from dpmd.processes import create_process
 
     create_process(agent, "p1", "cmd", False, False, "")
-    p = agent.processes["p1"]
-    p.stdout = "old1\nold2\n"
-    p.stderr = "olderr\n"
-    # Per-line accumulators that reader threads write to before
-    # monitor_process drains them into the ring.
-    p.output_lock = threading.Lock()
-    p.stdout_lines = ["staged1\n", "staged2\n"]
-    p.stderr_lines = ["staged_err\n"]
+    # Plant stale per-process tail state.
+    agent._log_offsets["p1"] = (12345, 99)
+    agent._live_chunk_index["p1"] = 7
 
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=5).encode())
 
-    assert len(p.stdout) == 0
-    assert len(p.stderr) == 0
-    assert p.stdout_lines == []
-    assert p.stderr_lines == []
+    assert "p1" not in agent._log_offsets
+    assert "p1" not in agent._live_chunk_index
 
 
-def test_subscribe_renewal_does_not_drain_ring_buffer(agent):
-    """Renewing an active subscription must NOT discard buffered content."""
+def test_subscribe_renewal_preserves_tail_offset(agent):
+    """Renewing an active subscription must NOT reset the offset."""
     from dpmd.commands import command_handler
     from dpmd.processes import create_process
 
     create_process(agent, "p1", "cmd", False, False, "")
-    # First subscribe — drains.
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=10, seq=1).encode())
 
-    # Now content arrives while the subscription is still active.
-    agent.processes["p1"].stdout = "live1\nlive2\n"
+    agent._log_offsets["p1"] = (4242, 17)
+    agent._live_chunk_index["p1"] = 3
 
-    # Renewal — must not wipe the live content.
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=10, seq=2).encode())
 
-    assert len(agent.processes["p1"].stdout) > 0
+    assert agent._log_offsets["p1"] == (4242, 17)
+    assert agent._live_chunk_index["p1"] == 3
 
 
-def test_subscribe_after_expiry_drains_again(agent):
-    """An expired subscription is treated as fresh: re-subscribe drains."""
+def test_subscribe_after_expiry_clears_offset_again(agent):
+    """An expired subscription is treated as fresh: re-subscribe resets."""
     import time as _time
     from dpmd.commands import command_handler
     from dpmd.processes import create_process
 
     create_process(agent, "p1", "cmd", False, False, "")
-    # Plant an expired subscription
     agent.output_subscriptions["p1"] = _time.monotonic() - 1.0
-    agent.processes["p1"].stdout = "stale\n"
+    agent._log_offsets["p1"] = (999, 5)
 
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=5).encode())
 
-    assert len(agent.processes["p1"].stdout) == 0
+    assert "p1" not in agent._log_offsets

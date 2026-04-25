@@ -74,6 +74,10 @@ def daemon_cfg(tmp_path) -> str:
         "max_restarts": -1,
         # Persist to tmp so the test doesn't write to /var/lib/dpm
         "persist_path": str(tmp_path / "processes.yaml"),
+        # Per-process logs to tmp so the test doesn't need /var/log/dpm.
+        # Output flows through this directory: reader threads write here
+        # and the publisher tails these files for live subscribers.
+        "process_log_dir": str(tmp_path / "logs"),
     }
     path = tmp_path / "dpm_it.yaml"
     path.write_text(yaml.safe_dump(cfg))
@@ -212,17 +216,26 @@ def test_process_output_round_trip(client_to_daemon):
     hostname = next(iter(client_to_daemon.hosts.keys()))
     name = "it_output"
 
+    # Continuous emitter so we catch a line on a publish cycle no matter
+    # exactly when the daemon anchors its tail offset against the file.
     client_to_daemon.create_proc(
-        name, "bash -c 'echo integration-ok; sleep 2'", "integration", hostname,
+        name,
+        "bash -c 'while true; do echo integration-ok; sleep 0.1; done'",
+        "integration", hostname,
     )
     _wait_for(
         lambda: (hostname, name) in client_to_daemon.procs,
         timeout=4.0, fail_msg="create telemetry didn't arrive",
     )
+    # Live output is silent-by-default and the publisher anchors at the
+    # current end-of-file on first subscribe — so subscribe BEFORE the
+    # process produces output.
+    client_to_daemon.subscribe_output(name, hostname, ttl_seconds=10)
     client_to_daemon.start_proc(name, hostname)
 
-    # Wait for the stdout chunk to land in the Client's buffer
     def _has_output():
+        # Renew the subscription so the daemon keeps publishing while we wait.
+        client_to_daemon.subscribe_output(name, hostname, ttl_seconds=10)
         _gen, text, _reset, _cur_len = client_to_daemon.get_proc_output_delta(
             name, last_gen=-1, last_len=0
         )

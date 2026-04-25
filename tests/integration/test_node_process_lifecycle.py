@@ -132,23 +132,23 @@ def test_stop_kills_process_group(real_agent):
 # Output capture
 # ---------------------------------------------------------------------------
 
-def test_stdout_captured_in_buffer(real_agent):
-    """Output written by a running process is drained into proc_info['stdout']."""
-    # Use a process that produces output while it's still alive so monitor_process
-    # drains the running-path (stdout buffer), not the exit-path (errors field).
+def test_stdout_captured_in_log_file(real_agent, tmp_path):
+    """Output written by a running process lands on the on-disk log file."""
+    real_agent.process_log_dir = str(tmp_path)
     create_process(
         real_agent,
         "it_output", "bash -c 'echo captured_line; sleep 2'", False, False, "integration"
     )
     start_process(real_agent, "it_output")
 
-    # Let the echo line be produced and picked up by the reader thread
+    # Let the echo line be produced and picked up by the reader thread.
     time.sleep(0.3)
 
-    # monitor_process while still running → drains stdout_lines into proc_info["stdout"]
-    monitor_process(real_agent, "it_output")
-
-    assert "captured_line" in real_agent.processes["it_output"].stdout
+    log_file = real_agent.processes["it_output"].log_file
+    assert log_file is not None
+    with open(log_file.path, "r") as f:
+        content = f.read()
+    assert "captured_line" in content
 
     stop_process(real_agent, "it_output")
     delete_process(real_agent, "it_output")

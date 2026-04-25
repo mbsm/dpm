@@ -9,8 +9,3 @@ reference that previously forced deferred imports inside function bodies).
 # process from producing LCM messages too large to fragment reliably
 # over UDP.
 MAX_OUTPUT_CHUNK = 64 * 1024  # 64 KB
-
-# Maximum bytes buffered per process on the daemon side. Prevents unbounded
-# memory growth when a process produces output faster than the publish
-# interval. The client-side cap (dpm.client) is matched to this value.
-MAX_OUTPUT_BUFFER = 2 * 1024 * 1024  # 2 MB

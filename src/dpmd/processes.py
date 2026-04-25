@@ -10,7 +10,6 @@ import shlex
 import signal
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass, field
 from subprocess import PIPE
 from typing import Any, TYPE_CHECKING
@@ -26,7 +25,6 @@ from dpm.constants import (
 )
 
 from dpmd.cgroups import cgroups_available, cleanup_cgroup, setup_cgroup
-from dpmd.limits import MAX_OUTPUT_BUFFER
 from dpmd.proc_logs import open_process_log
 
 if TYPE_CHECKING:
@@ -39,143 +37,41 @@ def is_running(proc: psutil.Popen | None) -> bool:
     return proc.poll() is None
 
 
-def stream_reader(stream, output_list, lock: threading.Lock, log_file=None) -> None:
+def stream_reader(stream, log_file) -> None:
+    """Read lines from *stream* and write them to *log_file* (if not None).
+
+    Disk is the single source of truth for process output. The publisher
+    tails the same file to push live chunks to subscribers, and read_log
+    serves history from it. There is no in-memory buffer.
+    """
     try:
         while True:
             line = stream.readline()
             if not line:
                 break
-            # line is str when Popen(text=True); keep compatibility if bytes
             if isinstance(line, bytes):
                 line = line.decode("utf-8", errors="replace")
             line = line.rstrip("\r\n")
-            if line:
-                line_with_nl = line + "\n"
-                with lock:
-                    output_list.append(line_with_nl)
-                if log_file is not None:
-                    log_file.write(line_with_nl)
-                if logging.getLogger().isEnabledFor(logging.DEBUG):
-                    logging.debug("Stream Reader: Captured line: %r", line)
+            if line and log_file is not None:
+                log_file.write(line + "\n")
     except (OSError, ValueError) as e:
         logging.error("Stream Reader: Error reading stream: %s", e)
 
 
-class _OutBuf:
-    """Chunked FIFO output buffer with a byte-count cap.
-
-    Append and take are O(1) amortized (no full-buffer copy). Supports the
-    same assertions the tests and existing callers rely on: ``len(buf)``,
-    ``bool(buf)``, and ``buf == "str"``.
-
-    Direct string assignment (``proc_info.stdout = "abc"``) is preserved
-    via ``Proc.__setattr__``, which forwards into ``replace()`` instead of
-    rebinding the attribute.
-    """
-
-    __slots__ = ("_chunks", "_total")
-
-    def __init__(self, initial: str = "") -> None:
-        self._chunks: deque = deque()
-        self._total: int = 0
-        if initial:
-            self._chunks.append(initial)
-            self._total = len(initial)
-
-    def __len__(self) -> int:
-        return self._total
-
-    def __bool__(self) -> bool:
-        return self._total > 0
-
-    def __eq__(self, other) -> bool:
-        if isinstance(other, str):
-            return "".join(self._chunks) == other
-        if isinstance(other, _OutBuf):
-            return "".join(self._chunks) == "".join(other._chunks)
-        return NotImplemented
-
-    def __contains__(self, item) -> bool:
-        # Supports ``"substr" in buf``. Joins chunks lazily only on demand.
-        return item in "".join(self._chunks)
-
-    def __str__(self) -> str:
-        return "".join(self._chunks)
-
-    def __repr__(self) -> str:
-        return f"_OutBuf(len={self._total})"
-
-    def append(self, new: str, max_size: int) -> None:
-        """Append *new*, trimming from the front so total stays ≤ max_size."""
-        if not new:
-            return
-        self._chunks.append(new)
-        self._total += len(new)
-        while self._total > max_size and self._chunks:
-            front = self._chunks[0]
-            excess = self._total - max_size
-            if len(front) <= excess:
-                self._chunks.popleft()
-                self._total -= len(front)
-            else:
-                self._chunks[0] = front[excess:]
-                self._total -= excess
-
-    def take(self, n: int) -> str:
-        """Pop up to *n* bytes from the front and return them as a string."""
-        if not self._chunks or n <= 0:
-            return ""
-        parts: list = []
-        taken = 0
-        while self._chunks and taken < n:
-            front = self._chunks[0]
-            remaining = n - taken
-            if len(front) <= remaining:
-                parts.append(front)
-                taken += len(front)
-                self._chunks.popleft()
-            else:
-                parts.append(front[:remaining])
-                self._chunks[0] = front[remaining:]
-                taken = n
-                break
-        self._total -= taken
-        return "".join(parts)
-
-    def peek(self, n: int) -> str:
-        """Return up to *n* bytes from the front without removing them.
-
-        Mirrors :meth:`take` so callers can stage a publish and only commit
-        (via ``take(len(peeked))``) once the side-effect succeeded.
-        """
-        if not self._chunks or n <= 0:
-            return ""
-        parts: list = []
-        taken = 0
-        for chunk in self._chunks:
-            remaining = n - taken
-            if len(chunk) <= remaining:
-                parts.append(chunk)
-                taken += len(chunk)
-                if taken >= n:
-                    break
-            else:
-                parts.append(chunk[:remaining])
-                break
-        return "".join(parts)
-
-    def replace(self, s: str) -> None:
-        """Clear and set to a single chunk containing *s*."""
-        self._chunks.clear()
-        self._total = 0
-        if s:
-            self._chunks.append(s)
-            self._total = len(s)
-
-
 @dataclass
 class Proc:
-    """All state for a single managed process."""
+    """All state for a single managed process.
+
+    Output is *not* held in memory. Both stdout and stderr land directly
+    in ``log_file`` (a single chronological stream); the publisher tails
+    that file for live subscribers, and ``read_log`` serves history from
+    the same file.
+
+    ``errors`` is a short human-readable status string (≤ a couple of
+    hundred chars) — never log content. Examples: a pre-launch reason
+    like ``"Working directory does not exist: /foo"`` or a post-exit
+    summary like ``"exit 134 (SIGABRT)"``.
+    """
     exec_command: str = ""
     auto_restart: bool = False
     realtime: bool = False
@@ -189,31 +85,13 @@ class Proc:
     state: str = STATE_READY
     errors: str = ""
     exit_code: int = -1
-    stdout: _OutBuf = field(default_factory=_OutBuf)
-    stderr: _OutBuf = field(default_factory=_OutBuf)
     restart_count: int = 0
     last_restart_time: float = 0.0
     proc: Any = None       # psutil.Popen | None
     ps_proc: Any = None    # psutil.Process | None
-    output_lock: Any = None  # threading.Lock | None
-    stdout_lines: list = field(default_factory=list)
-    stderr_lines: list = field(default_factory=list)
     stdout_thread: Any = None  # threading.Thread | None
     stderr_thread: Any = None  # threading.Thread | None
     log_file: Any = None       # proc_logs.ProcessLogFile | None
-
-    def __setattr__(self, name, value):
-        # Preserve the historical str-assignment API for stdout/stderr:
-        # `proc_info.stdout = "x"` replaces the buffer contents in-place
-        # rather than swapping the _OutBuf instance out.
-        if name in ("stdout", "stderr") and isinstance(value, str):
-            existing = self.__dict__.get(name)
-            if isinstance(existing, _OutBuf):
-                existing.replace(value)
-                return
-            object.__setattr__(self, name, _OutBuf(value))
-            return
-        object.__setattr__(self, name, value)
 
 
 def create_process(
@@ -315,21 +193,13 @@ def start_process(d: "Daemon", process_name) -> None:
             "Start Process: Clearing SUSPENDED state for %s.", process_name
         )
 
-    # Join any still-alive reader threads from a previous run before we
-    # reassign the output scaffolding below. If monitor_process hasn't
-    # reaped them yet (e.g., a manual restart right after a crash), a
-    # leftover reader could append to the old stdout_lines after we've
-    # swapped in a new list, mixing output between runs.
+    # Join any still-alive reader threads from a previous run so we don't
+    # leak threads writing to the file handle on a manual restart.
     for tattr in ("stdout_thread", "stderr_thread"):
         t = getattr(proc_info, tattr, None)
         if t is not None:
             t.join(timeout=2.0)
             setattr(proc_info, tattr, None)
-
-    # Clear any stale buffered output from a previous run so it isn't
-    # re-published after restart and mixed with the new process's output.
-    proc_info.stdout = ""
-    proc_info.stderr = ""
 
     logging.info(
         "Start Process: Starting process: %s with command: %s",
@@ -337,17 +207,11 @@ def start_process(d: "Daemon", process_name) -> None:
         exec_command,
     )
 
-    # Set output scaffolding before Popen so monitor_process always finds them
-    output_lock = threading.Lock()
-    stdout_lines = []
-    stderr_lines = []
-    proc_info.output_lock = output_lock
-    proc_info.stdout_lines = stdout_lines
-    proc_info.stderr_lines = stderr_lines
-
     # Open (or reuse) the on-disk log file. One file per process; both
-    # stdout and stderr are appended in chronological order. Disabled if
-    # the daemon config sets process_log_dir to falsy.
+    # stdout and stderr are appended in chronological order. The daemon
+    # treats this file as the single source of truth for process output:
+    # the publisher tails it for live subscribers, and read_log serves
+    # history from it. Disabled if process_log_dir is falsy.
     log_dir = getattr(d, "process_log_dir", None)
     if log_dir and proc_info.log_file is None:
         proc_info.log_file = open_process_log(
@@ -356,13 +220,16 @@ def start_process(d: "Daemon", process_name) -> None:
             max_bytes=getattr(d, "process_log_max_bytes", 50 * 1024 * 1024),
             backups=getattr(d, "process_log_backups", 3),
         )
-    if proc_info.log_file is not None:
-        proc_info.log_file.write_marker(f"start cmd={exec_command!r}")
+    log_file = proc_info.log_file
+    if log_file is not None:
+        log_file.write_marker(f"start cmd={exec_command!r}")
 
     work_dir = proc_info.work_dir
     if work_dir and not os.path.isdir(work_dir):
         error_msg = f"Working directory does not exist: {work_dir}"
         logging.error("Start Process: %s", error_msg)
+        if log_file is not None:
+            log_file.write_marker(f"start failed: {error_msg}")
         proc_info.state = STATE_FAILED
         proc_info.errors = error_msg
         return
@@ -386,18 +253,17 @@ def start_process(d: "Daemon", process_name) -> None:
         proc_info.state = STATE_RUNNING
         proc_info.errors = ""
 
-        # Start threads to read stdout and stderr.
-        # A single lock guards both lists so the drain in monitor_process
-        # is always consistent with concurrent appends from the reader threads.
-        log_file = proc_info.log_file
+        # Reader threads write child output straight to the log file.
+        # ProcessLogFile serializes writes with its own lock, so the two
+        # readers can share the handle without interleaving mid-line.
         stdout_thread = threading.Thread(
             target=stream_reader,
-            args=(proc.stdout, stdout_lines, output_lock, log_file),
+            args=(proc.stdout, log_file),
             daemon=True,
         )
         stderr_thread = threading.Thread(
             target=stream_reader,
-            args=(proc.stderr, stderr_lines, output_lock, log_file),
+            args=(proc.stderr, log_file),
             daemon=True,
         )
         stdout_thread.start()
@@ -426,17 +292,22 @@ def start_process(d: "Daemon", process_name) -> None:
                     proc.pid,
                 )
             except PermissionError:
+                msg = "Permission denied setting real-time priority."
                 logging.error(
                     "Start Process: Failed to set real-time priority for process %s: Permission denied.",
                     process_name,
                 )
-                proc_info.errors = "Permission denied setting real-time priority."
+                if log_file is not None:
+                    log_file.write_marker(f"warning: {msg}")
+                proc_info.errors = msg
             except (OSError, ValueError) as e:
                 logging.error(
                     "Start Process: Failed to set real-time priority for process %s: %s",
                     process_name,
                     e,
                 )
+                if log_file is not None:
+                    log_file.write_marker(f"warning: rt priority: {e}")
                 proc_info.errors = str(e)
 
         # Apply cgroup resource limits (cpuset, CPU, memory, isolation)
@@ -455,6 +326,8 @@ def start_process(d: "Daemon", process_name) -> None:
                     "Start Process: %s for %s (continuing without limits)",
                     err_msg, process_name,
                 )
+                if log_file is not None:
+                    log_file.write_marker(f"warning: {err_msg}")
                 proc_info.errors = err_msg
 
     except (OSError, ValueError, psutil.Error) as e:
@@ -464,8 +337,8 @@ def start_process(d: "Daemon", process_name) -> None:
         proc_info.state = STATE_FAILED
         proc_info.errors = str(e)
         proc_info.proc = None
-        if proc_info.log_file is not None:
-            proc_info.log_file.write_marker(f"start failed: {error_msg}")
+        if log_file is not None:
+            log_file.write_marker(f"start failed: {error_msg}")
 
 
 def stop_process(d: "Daemon", process_name) -> None:
@@ -583,18 +456,36 @@ def _kill_process_group(d: "Daemon", pid: int, sig: int) -> bool:
         return False
 
 
-def _drain_output(d: "Daemon", proc_info: "Proc") -> tuple[str, str]:
-    """Drain buffered stdout/stderr lines under the output lock.
+def _exit_summary(exit_code: int) -> str:
+    """Short human-readable description of an exit, for proc_info.errors."""
+    if exit_code == 0:
+        return ""
+    if exit_code < 0:
+        try:
+            sig_name = signal.Signals(-exit_code).name
+        except ValueError:
+            sig_name = f"signal {-exit_code}"
+        return f"exit {exit_code} ({sig_name})"
+    return f"exit {exit_code}"
 
-    Returns (stdout_content, stderr_content) and clears the line buffers.
+
+def _read_log_tail(log_file, n_bytes: int = 4096) -> str:
+    """Read up to *n_bytes* from the end of *log_file*'s on-disk path.
+
+    Used to fill the crash sidecar with recent stderr after a process
+    exits. Best-effort: returns "" on any I/O error.
     """
-    output_lock = proc_info.output_lock
-    with output_lock:
-        stdout_content = "".join(proc_info.stdout_lines)
-        stderr_content = "".join(proc_info.stderr_lines)
-        proc_info.stdout_lines.clear()
-        proc_info.stderr_lines.clear()
-    return stdout_content, stderr_content
+    if log_file is None:
+        return ""
+    try:
+        path = log_file.path
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - n_bytes))
+            return f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def _check_auto_restart(d: "Daemon", process_name: str, proc_info: "Proc") -> None:
@@ -629,7 +520,7 @@ def _check_auto_restart(d: "Daemon", process_name: str, proc_info: "Proc") -> No
 
 
 def monitor_process(d: "Daemon", process_name) -> None:
-    """Monitor a running process and publish any buffered output."""
+    """Monitor a running process; reap on exit and trigger auto-restart."""
     if process_name not in d.processes:
         logging.warning(
             "Monitor Process: Called with process %s not in process table.",
@@ -649,68 +540,54 @@ def monitor_process(d: "Daemon", process_name) -> None:
     if proc is None or proc_info.state != STATE_RUNNING:
         return
 
-    if not is_running(proc):
-        exit_code = proc.poll()
-        exit_code = exit_code if exit_code is not None else -1
-        proc_info.exit_code = exit_code
-        proc_info.proc = None
-
-        if exit_code == 0:
-            logging.info(
-                "Monitor Process: Process %s exited cleanly (code 0).",
-                process_name,
-            )
-            proc_info.state = STATE_READY
-            proc_info.restart_count = 0
-            if proc_info.log_file is not None:
-                proc_info.log_file.write_marker(f"exit code=0")
-        else:
-            logging.warning(
-                "Monitor Process: Process %s failed with exit code: %s",
-                process_name,
-                exit_code,
-            )
-            proc_info.state = STATE_FAILED
-            if proc_info.log_file is not None:
-                proc_info.log_file.write_marker(f"exit code={exit_code}")
-
-        # Wait for reader threads to finish so all pipe data is captured
-        for tattr in ("stdout_thread", "stderr_thread"):
-            t = getattr(proc_info, tattr, None)
-            if t is not None:
-                t.join(timeout=2.0)
-                setattr(proc_info, tattr, None)
-
-        # Capture any remaining output
-        stdout_content, stderr_content = _drain_output(d, proc_info)
-
-        if stdout_content or stderr_content:
-            proc_info.errors = stdout_content + stderr_content
-            # Final output is on disk via the per-line writer. The next
-            # log-publish cycle (if a client has subscribed) will drain
-            # whatever's still in the ring buffer; if nobody's watching,
-            # the on-disk file is the source of truth.
-        elif exit_code != 0:
-            proc_info.errors = f"Process exited with code {exit_code}."
-
-        # Forensic breadcrumb: separate file with last stderr + exit context.
-        if exit_code != 0 and proc_info.log_file is not None:
-            tail_stderr = stderr_content[-4096:] if stderr_content else ""
-            proc_info.log_file.write_crash_sidecar(
-                exit_code, proc_info.restart_count, tail_stderr
-            )
-
-        # Auto-restart only on failure (non-zero exit), with exponential backoff
-        if proc_info.auto_restart and exit_code != 0:
-            _check_auto_restart(d, process_name, proc_info)
+    if is_running(proc):
         return
 
-    # Still running: pull any accumulated stream output into stdout/stderr buffers
-    stdout_content, stderr_content = _drain_output(d, proc_info)
-    if stdout_content:
-        proc_info.stdout.append(stdout_content, MAX_OUTPUT_BUFFER)
-    if stderr_content:
-        proc_info.stderr.append(stderr_content, MAX_OUTPUT_BUFFER)
+    # Process has exited — reap, write markers, decide on auto-restart.
+    exit_code = proc.poll()
+    exit_code = exit_code if exit_code is not None else -1
+    proc_info.exit_code = exit_code
+    proc_info.proc = None
+
+    log_file = proc_info.log_file
+    if exit_code == 0:
+        logging.info(
+            "Monitor Process: Process %s exited cleanly (code 0).",
+            process_name,
+        )
+        proc_info.state = STATE_READY
+        proc_info.restart_count = 0
+        proc_info.errors = ""
+        if log_file is not None:
+            log_file.write_marker("exit code=0")
+    else:
+        logging.warning(
+            "Monitor Process: Process %s failed with exit code: %s",
+            process_name,
+            exit_code,
+        )
+        proc_info.state = STATE_FAILED
+        proc_info.errors = _exit_summary(exit_code)
+        if log_file is not None:
+            log_file.write_marker(f"exit code={exit_code}")
+
+    # Wait for reader threads to drain the closed pipes; their writes
+    # land in log_file before we move on.
+    for tattr in ("stdout_thread", "stderr_thread"):
+        t = getattr(proc_info, tattr, None)
+        if t is not None:
+            t.join(timeout=2.0)
+            setattr(proc_info, tattr, None)
+
+    # Forensic breadcrumb: a separate file with exit context plus the
+    # last few KB of the on-disk log. Survives log rotation.
+    if exit_code != 0 and log_file is not None:
+        log_file.write_crash_sidecar(
+            exit_code, proc_info.restart_count, _read_log_tail(log_file)
+        )
+
+    if proc_info.auto_restart and exit_code != 0:
+        _check_auto_restart(d, process_name, proc_info)
 
 
 def _group_matches(d: "Daemon", process_group: str, target_group: str | None) -> bool:

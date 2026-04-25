@@ -170,14 +170,14 @@ def handle_read_log(d: "Daemon", msg) -> None:
 def handle_subscribe_output(d: "Daemon", msg) -> None:
     """Refresh / extend a live-output subscription for ``msg.name``.
 
-    The publish loop in dpmd.telemetry.publish_procs_outputs only emits
-    a chunk for processes with a non-expired entry here.
+    The publish loop in ``dpmd.telemetry.publish_procs_outputs`` tails
+    the on-disk log only for processes with a non-expired entry here.
 
-    On the *first* subscribe (no prior entry, or prior entry expired),
-    drain the ring buffer for this proc without publishing. This avoids
-    double-delivery when a client has just seeded its view via read_log:
-    anything already on disk is also probably in the ring buffer, and
-    re-emitting it would show up as duplicated content in --follow.
+    A fresh subscription (no prior entry, or prior entry expired) clears
+    any stale tail offset so the first publish cycle re-anchors at
+    current EOF. This is the disk-tail analogue of the old "drain on
+    subscribe" behavior: a client that has just seeded its view via
+    ``read_log`` will not see those bytes re-published on follow.
     """
     ttl = float(msg.ttl_seconds) if msg.ttl_seconds > 0 else _DEFAULT_SUBSCRIPTION_TTL
     ttl = min(ttl, _MAX_SUBSCRIPTION_TTL)
@@ -188,25 +188,9 @@ def handle_subscribe_output(d: "Daemon", msg) -> None:
         prior = d.output_subscriptions.get(msg.name, 0.0)
         is_fresh = prior <= now_mono
         d.output_subscriptions[msg.name] = expires_at
-
-    if is_fresh:
-        proc_info = d.processes.get(msg.name)
-        if proc_info is not None:
-            # Discard whatever's already buffered. There are two layers:
-            #   (a) per-line accumulators (stdout_lines/stderr_lines) that the
-            #       reader threads write to in real time;
-            #   (b) the ring buffer (proc_info.stdout/stderr) that monitor_process
-            #       drains those lists into at monitor_interval.
-            # Both must be cleared, otherwise the next monitor cycle would
-            # promote stale lines into the ring and they'd land on the wire
-            # alongside genuinely-new content.
-            output_lock = getattr(proc_info, "output_lock", None)
-            if output_lock is not None:
-                with output_lock:
-                    proc_info.stdout_lines.clear()
-                    proc_info.stderr_lines.clear()
-            proc_info.stdout.take(len(proc_info.stdout))
-            proc_info.stderr.take(len(proc_info.stderr))
+        if is_fresh:
+            d._log_offsets.pop(msg.name, None)
+            d._live_chunk_index.pop(msg.name, None)
 
     logging.debug(
         "subscribe_output: %s active for %.1fs (req_seq=%d, fresh=%s)",

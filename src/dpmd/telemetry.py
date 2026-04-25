@@ -217,52 +217,80 @@ def publish_host_procs(d: "Daemon") -> None:
 
 
 def publish_procs_outputs(d: "Daemon") -> None:
-    """Publish live output chunks only for processes a client has subscribed to.
+    """Tail each subscribed process's on-disk log and publish new bytes.
 
-    Subscriptions are short-TTL (~5 s) entries refreshed by clients while
-    they're actively watching with ``dpm logs --follow``. Without an
-    active subscription, the daemon still reads pipes (so the child
-    doesn't block) and writes to the on-disk log — it just doesn't
-    publish on the wire. That's the whole point: silent-by-default.
+    Output is *not* held in memory by the daemon. The on-disk log file
+    (``proc_info.log_file``) is the single source of truth: reader
+    threads append to it line-by-line, ``read_log`` serves history from
+    it, and this function tails it for live subscribers.
+
+    State per subscription is just ``(byte_offset, inode)``. On the
+    first cycle after subscribe we anchor at current EOF — new
+    subscribers see only what arrives from this point forward. If a
+    rotation is detected (inode changed, or file shrank), we reset to
+    offset 0 of the new file. Subscriptions are short-TTL (~5 s) and
+    refreshed by clients while they're actively following.
     """
     now_mono = time.monotonic()
     with d._subscriptions_lock:
-        # Drop expired entries up front so a chatty proc doesn't keep
-        # re-checking a stale dict on every cycle.
         for name in [n for n, exp in d.output_subscriptions.items() if exp <= now_mono]:
             d.output_subscriptions.pop(name, None)
-        active = set(d.output_subscriptions.keys())
+            d._log_offsets.pop(name, None)
+            d._live_chunk_index.pop(name, None)
+        active = list(d.output_subscriptions.keys())
 
     if not active:
-        # Drain ring buffers anyway so they don't grow unbounded while
-        # nobody's listening. Without this, `_OutBuf.append` would still
-        # cap memory at MAX_OUTPUT_BUFFER, but we'd carry stale content
-        # forward indefinitely.
-        for proc_info in d.processes.values():
-            proc_info.stdout.take(MAX_OUTPUT_CHUNK)
-            proc_info.stderr.take(MAX_OUTPUT_CHUNK)
         return
 
     now_us = int(time.time() * 1_000_000)
     for process_name in active:
         proc_info = d.processes.get(process_name)
-        if proc_info is None:
+        if proc_info is None or proc_info.log_file is None:
+            continue
+        path = proc_info.log_file.path
+
+        try:
+            st = os.stat(path)
+        except OSError:
             continue
 
-        # Peek (don't drain) so a publish failure leaves the bytes in the
-        # ring buffer for the next cycle instead of silently losing them.
-        stdout_chunk = proc_info.stdout.peek(MAX_OUTPUT_CHUNK)
-        stderr_chunk = proc_info.stderr.peek(MAX_OUTPUT_CHUNK)
-        if not stdout_chunk and not stderr_chunk:
+        prev = d._log_offsets.get(process_name)
+        if prev is None:
+            # First cycle since subscribe: anchor at current EOF; the
+            # next cycle will ship anything written after this moment.
+            d._log_offsets[process_name] = (st.st_size, st.st_ino)
             continue
 
-        # Merge stderr after stdout for the live-publish path. The on-disk
-        # log already has them interleaved; here we don't have line-level
-        # ordering so a deterministic stdout-then-stderr is the best we
-        # can do without a more invasive plumbing change.
-        content = stdout_chunk + stderr_chunk
+        offset, inode = prev
+        if inode != st.st_ino or st.st_size < offset:
+            offset, inode = 0, st.st_ino  # rotated or truncated; reread
+
+        if st.st_size <= offset:
+            continue
+
+        try:
+            with open(path, "rb") as f:
+                f.seek(offset)
+                raw = f.read(MAX_OUTPUT_CHUNK)
+        except OSError as e:
+            logging.warning("publish_procs_outputs: read failed for %s: %s", path, e)
+            continue
+
+        # Trim to the last newline so we never ship a partial line. If
+        # there is no newline at all, only ship when the chunk is full
+        # (degenerate case: a single line longer than MAX_OUTPUT_CHUNK).
+        last_nl = raw.rfind(b"\n")
+        if last_nl == -1:
+            if len(raw) < MAX_OUTPUT_CHUNK:
+                continue  # wait for the rest of the line
+            shipped_bytes = raw
+        else:
+            shipped_bytes = raw[: last_nl + 1]
+
+        if not shipped_bytes:
+            continue
+
         idx = d._live_chunk_index.get(process_name, 0)
-
         msg = log_chunk_t()
         msg.protocol_version = DPM_PROTOCOL_VERSION
         msg.request_seq = 0  # unsolicited live publish
@@ -271,16 +299,13 @@ def publish_procs_outputs(d: "Daemon") -> None:
         msg.name = process_name
         msg.chunk_index = idx
         msg.last = False
-        msg.content = content
+        msg.content = shipped_bytes.decode("utf-8", errors="replace")
         try:
             d.lc.publish(d.log_chunks_channel, msg.encode())
         except OSError as e:
             logging.error("Failed to publish log chunk for %s: %s", process_name, e)
             d._handle_lcm_error(e)
-            return  # stop publishing this cycle; LCM will be reinitialized
+            return
 
-        # Commit only on successful publish: drain the bytes we just sent
-        # and bump chunk_index so a follower sees a contiguous sequence.
-        proc_info.stdout.take(len(stdout_chunk))
-        proc_info.stderr.take(len(stderr_chunk))
+        d._log_offsets[process_name] = (offset + len(shipped_bytes), inode)
         d._live_chunk_index[process_name] = idx + 1

@@ -54,9 +54,6 @@ def test_suspended_after_max_restarts(agent_with_max_restarts):
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
     agent.processes["test"].proc = mock_proc
-    agent.processes["test"].output_lock = MagicMock()
-    agent.processes["test"].stdout_lines = []
-    agent.processes["test"].stderr_lines = []
 
     monitor_process(agent, "test")
     assert agent.processes["test"].state == STATE_SUSPENDED
@@ -77,9 +74,6 @@ def test_restart_below_max_not_suspended(agent_with_max_restarts):
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
     agent.processes["test"].proc = mock_proc
-    agent.processes["test"].output_lock = MagicMock()
-    agent.processes["test"].stdout_lines = []
-    agent.processes["test"].stderr_lines = []
 
     with patch("dpmd.processes.start_process") as mock_start:
         monitor_process(agent, "test")
@@ -124,9 +118,6 @@ def test_unlimited_restarts_when_minus_one(agent):
     mock_proc = MagicMock()
     mock_proc.poll.return_value = 1
     agent.processes["test"].proc = mock_proc
-    agent.processes["test"].output_lock = MagicMock()
-    agent.processes["test"].stdout_lines = []
-    agent.processes["test"].stderr_lines = []
 
     with patch("dpmd.processes.start_process"):
         monitor_process(agent, "test")

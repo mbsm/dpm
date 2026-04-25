@@ -18,9 +18,7 @@ import yaml
 import lcm
 
 from dpmd.cgroups import _resolve_cgroup_base
-# Re-export for backwards compatibility with callers that used
-# ``from dpmd.daemon import MAX_OUTPUT_CHUNK``.
-from dpmd.limits import MAX_OUTPUT_BUFFER, MAX_OUTPUT_CHUNK  # noqa: F401
+from dpmd.limits import MAX_OUTPUT_CHUNK  # noqa: F401  (re-exported for callers)
 from dpmd.commands import command_handler
 from dpmd.processes import (
     _handle_signal,
@@ -71,6 +69,11 @@ class Daemon:
         self._subscriptions_lock = threading.Lock()
         # Per-process chunk index for unsolicited live publishes.
         self._live_chunk_index: dict = {}
+        # Per-process tail position into the on-disk log:
+        #   {process_name: (byte_offset, inode)}
+        # Set on the first publish cycle after subscribe (anchors at
+        # current EOF) and cleared when the subscription expires.
+        self._log_offsets: dict = {}
         self.stop_timeout = self.config["stop_timeout"]
         self.max_restarts = int(self.config.get("max_restarts", -1))
 
