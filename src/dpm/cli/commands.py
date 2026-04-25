@@ -13,7 +13,12 @@ from dpm.cli.formatting import (
     format_state,
     format_table,
 )
-from dpm.cli.wait import wait_for_proc_gone, wait_for_state, wait_for_telemetry
+from dpm.cli.wait import (
+    wait_for_proc_gone,
+    wait_for_proc_present,
+    wait_for_state,
+    wait_for_telemetry,
+)
 
 
 def _no_daemons():
@@ -118,12 +123,14 @@ def _require_proc(client, args):
     """Common preamble: wait for telemetry, validate process exists.
 
     Returns (name, host) on success, or None and prints an error.
+    Polls briefly for the proc to appear — tolerates the case where the
+    caller just `add`-ed it and the host_procs telemetry hasn't landed yet.
     """
     if not wait_for_telemetry(client):
         _no_daemons()
         return None
     name, host = args.name, args.host
-    if (host, name) not in client.procs:
+    if not wait_for_proc_present(client, name, host, timeout=3.0):
         print(f"Process '{name}@{host}' not found.", file=sys.stderr)
         return None
     return name, host

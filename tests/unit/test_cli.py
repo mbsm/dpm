@@ -154,6 +154,7 @@ def test_status_host_not_found(mock_wait, client, capsys):
 def test_start_calls_client(mock_wait, mock_state, client, capsys):
     _inject(client, procs=[_make_proc("cam", "jet1", state="T")])
     client.start_proc = MagicMock()
+    # _require_proc polls for proc presence; insert a fake telemetry hit.
     args = argparse.Namespace(command="start", name="cam", host="jet1")
     rc = commands.cmd_start(client, args)
     assert rc == 0

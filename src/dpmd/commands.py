@@ -172,13 +172,32 @@ def handle_subscribe_output(d: "Daemon", msg) -> None:
 
     The publish loop in dpmd.telemetry.publish_procs_outputs only emits
     a chunk for processes with a non-expired entry here.
+
+    On the *first* subscribe (no prior entry, or prior entry expired),
+    drain the ring buffer for this proc without publishing. This avoids
+    double-delivery when a client has just seeded its view via read_log:
+    anything already on disk is also probably in the ring buffer, and
+    re-emitting it would show up as duplicated content in --follow.
     """
     ttl = float(msg.ttl_seconds) if msg.ttl_seconds > 0 else _DEFAULT_SUBSCRIPTION_TTL
     ttl = min(ttl, _MAX_SUBSCRIPTION_TTL)
-    expires_at = time.monotonic() + ttl
+    now_mono = time.monotonic()
+    expires_at = now_mono + ttl
+
     with d._subscriptions_lock:
+        prior = d.output_subscriptions.get(msg.name, 0.0)
+        is_fresh = prior <= now_mono
         d.output_subscriptions[msg.name] = expires_at
+
+    if is_fresh:
+        proc_info = d.processes.get(msg.name)
+        if proc_info is not None:
+            # Discard whatever's already buffered; new content from this
+            # point on will reach the client.
+            proc_info.stdout.take(len(proc_info.stdout))
+            proc_info.stderr.take(len(proc_info.stderr))
+
     logging.debug(
-        "subscribe_output: %s active for %.1fs (req_seq=%d)",
-        msg.name, ttl, msg.seq,
+        "subscribe_output: %s active for %.1fs (req_seq=%d, fresh=%s)",
+        msg.name, ttl, msg.seq, is_fresh,
     )

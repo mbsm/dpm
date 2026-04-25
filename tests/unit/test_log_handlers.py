@@ -148,3 +148,54 @@ def test_subscribe_output_extends_existing_subscription(agent):
     command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=10, seq=2).encode())
     second = agent.output_subscriptions["p1"]
     assert second > first
+
+
+def test_first_subscribe_drains_ring_buffer(agent):
+    """A fresh subscribe discards already-buffered content so --follow doesn't
+    re-deliver lines the client already pulled via read_log."""
+    from dpmd.commands import command_handler
+    from dpmd.processes import create_process
+
+    create_process(agent, "p1", "cmd", False, False, "")
+    agent.processes["p1"].stdout = "old1\nold2\n"
+    agent.processes["p1"].stderr = "olderr\n"
+
+    command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=5).encode())
+
+    # Buffers were drained on first subscribe.
+    assert len(agent.processes["p1"].stdout) == 0
+    assert len(agent.processes["p1"].stderr) == 0
+
+
+def test_subscribe_renewal_does_not_drain_ring_buffer(agent):
+    """Renewing an active subscription must NOT discard buffered content."""
+    from dpmd.commands import command_handler
+    from dpmd.processes import create_process
+
+    create_process(agent, "p1", "cmd", False, False, "")
+    # First subscribe — drains.
+    command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=10, seq=1).encode())
+
+    # Now content arrives while the subscription is still active.
+    agent.processes["p1"].stdout = "live1\nlive2\n"
+
+    # Renewal — must not wipe the live content.
+    command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=10, seq=2).encode())
+
+    assert len(agent.processes["p1"].stdout) > 0
+
+
+def test_subscribe_after_expiry_drains_again(agent):
+    """An expired subscription is treated as fresh: re-subscribe drains."""
+    import time as _time
+    from dpmd.commands import command_handler
+    from dpmd.processes import create_process
+
+    create_process(agent, "p1", "cmd", False, False, "")
+    # Plant an expired subscription
+    agent.output_subscriptions["p1"] = _time.monotonic() - 1.0
+    agent.processes["p1"].stdout = "stale\n"
+
+    command_handler(agent, "ch", _cmd("subscribe_output", name="p1", ttl_seconds=5).encode())
+
+    assert len(agent.processes["p1"].stdout) == 0

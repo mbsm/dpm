@@ -59,3 +59,21 @@ def wait_for_proc_gone(
             return True
         time.sleep(poll)
     return False
+
+
+def wait_for_proc_present(
+    client, name: str, host: str,
+    timeout: float = 3.0,
+    poll: float = 0.2,
+) -> bool:
+    """Block until the process appears in the client's procs dict.
+
+    Useful right after `add` — host_procs telemetry travels at the daemon's
+    procs_status_interval, so a follow-up command can race the snapshot.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if (host, name) in client.procs:
+            return True
+        time.sleep(poll)
+    return False
