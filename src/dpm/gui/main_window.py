@@ -10,7 +10,6 @@ from PyQt5.QtGui import QBrush, QColor, QFontMetrics
 from PyQt5.QtWidgets import (
     QAction,
     QApplication,
-    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -316,6 +315,11 @@ class MainWindow(QMainWindow):
         self.dark_mode = DARK_MODE_DEFAULT
         self.setWindowTitle("DPM - Process Manager")
         self.setGeometry(100, 100, 900, 600)
+
+        # Status bar — used by launch/shutdown to stream progress without
+        # popping a modal dialog. Calling statusBar() lazily creates it.
+        self._launch_in_progress = False
+        self.statusBar().showMessage("Ready")
 
         # caches for update-in-place process tree ----
         self._group_items = {}  # group_name -> QTreeWidgetItem (top-level)
@@ -1402,6 +1406,13 @@ class MainWindow(QMainWindow):
         from dpm.operations import parse_launch_file
 
         mode = "Shutdown" if reverse else "Launch"
+
+        if self._launch_in_progress:
+            self.statusBar().showMessage(
+                "A launch/shutdown is already running.", 5000
+            )
+            return
+
         fname, _ = QFileDialog.getOpenFileName(
             self, f"Select {mode} File", "", "YAML Files (*.yml *.yaml)"
         )
@@ -1411,65 +1422,49 @@ class MainWindow(QMainWindow):
         try:
             script = parse_launch_file(fname)
         except (OSError, ValueError) as e:
+            self.statusBar().showMessage(f"Invalid {mode.lower()} file: {e}")
             QMessageBox.critical(self, "Error", f"Invalid launch file: {e}")
             return
 
-        # Build progress dialog
-        dlg = QDialog(self)
-        dlg.setWindowTitle(mode)
-        dlg.setMinimumWidth(400)
-        dlg_layout = QVBoxLayout(dlg)
-        dlg_label = QLabel(f"{mode}: {script['name']}\n\nStarting...")
-        dlg_label.setWordWrap(True)
-        dlg_layout.addWidget(dlg_label)
+        # Non-blocking: progress streams into the status bar; the function
+        # returns immediately and the worker thread emits Qt signals back.
+        self._launch_in_progress = True
+        self.statusBar().showMessage(f"{mode}: {script['name']} starting...")
 
-        # Track result from worker thread via signals
-        self._launch_result_error = False
-        self._launch_result_text = ""
-        self._launch_progress_lines: list = []
-
-        # Append-mode progress: each info/warn emits, dialog accumulates.
         def _on_progress(text):
-            self._launch_progress_lines.append(text)
-            # Trim old lines so the dialog doesn't grow without bound
-            if len(self._launch_progress_lines) > 40:
-                self._launch_progress_lines = self._launch_progress_lines[-40:]
-            dlg_label.setText(
-                f"{mode}: {script['name']}\n\n"
-                + "\n".join(self._launch_progress_lines)
-            )
+            # Status bar is single-line; collapse any embedded whitespace
+            # and strip the operations.py indent so messages render cleanly.
+            line = " ".join(text.split())
+            self.statusBar().showMessage(f"{mode}: {line}")
 
         def _on_finished(is_error, result_text):
-            self._launch_result_error = is_error
-            self._launch_result_text = result_text
-            dlg.accept()
+            try:
+                self._launch_text_changed.disconnect(_on_progress)
+                self._launch_finished.disconnect(_on_finished)
+            except TypeError:
+                # Already disconnected (defensive)
+                pass
+            self._launch_in_progress = False
+            self.refresh_processes_in_place()
+
+            summary = (result_text or f"{mode} complete.").splitlines()[0]
+            if is_error:
+                self.statusBar().showMessage(f"{mode} failed: {summary}")
+                # Hard failures still pop a modal — too important to bury.
+                QMessageBox.critical(
+                    self, f"{mode} Failed", result_text or "Unknown error"
+                )
+            else:
+                self.statusBar().showMessage(summary)
 
         self._launch_text_changed.connect(_on_progress)
         self._launch_finished.connect(_on_finished)
 
-        # Start worker thread
-        thread = threading.Thread(
+        threading.Thread(
             target=self._launch_worker,
             args=(script, reverse),
             daemon=True,
-        )
-        thread.start()
-
-        # exec_ blocks here; signals keep the dialog responsive
-        dlg.exec_()
-
-        # Disconnect signals to avoid stale references
-        self._launch_text_changed.disconnect(_on_progress)
-        self._launch_finished.disconnect(_on_finished)
-
-        self.refresh_processes_in_place()
-
-        if self._launch_result_error:
-            QMessageBox.critical(self, f"{mode} Failed", self._launch_result_text)
-        elif self._launch_result_text:
-            QMessageBox.warning(self, f"{mode} Complete", self._launch_result_text)
-        else:
-            QMessageBox.information(self, mode, f"{mode} complete.")
+        ).start()
 
     def _launch_worker(self, script, reverse):
         """Runs in a background thread.
