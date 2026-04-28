@@ -165,8 +165,9 @@ def test_create_processes_success():
     procs = [
         {"name": "svc", "cmd": "echo hi", "host": "h1", "group": "core"},
     ]
-    errors = _create_processes_from_script(sup, procs, MagicMock())
+    errors, sent = _create_processes_from_script(sup, procs, MagicMock())
     assert errors == 0
+    assert sent == [("h1", "svc")]
     sup.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "h1", False, False,
         rt_priority=0,
@@ -185,8 +186,9 @@ def test_create_processes_with_options():
             "rt_priority": 70,
         },
     ]
-    errors = _create_processes_from_script(sup, procs, MagicMock())
+    errors, sent = _create_processes_from_script(sup, procs, MagicMock())
     assert errors == 0
+    assert sent == [("h1", "svc")]
     sup.create_proc.assert_called_once_with(
         "svc", "echo hi", "core", "h1", True, True,
         rt_priority=70,
@@ -201,8 +203,9 @@ def test_create_processes_error_counted():
     procs = [
         {"name": "svc", "cmd": "echo hi", "host": "h1", "group": "core"},
     ]
-    errors = _create_processes_from_script(sup, procs, MagicMock())
+    errors, sent = _create_processes_from_script(sup, procs, MagicMock())
     assert errors == 1
+    assert sent == []
 
 
 # --- _fan_out_group ---
@@ -259,11 +262,17 @@ def test_wait_group_running_timeout():
     from dpm.operations import _wait_group
     proc = MagicMock()
     proc.group = "core"
+    proc.state = "F"
+    proc.errors = "binary not found"
     sup = _mock_client_with_procs({("h1", "svc"): proc})
     with patch("dpm.operations.wait_for_state", return_value=False):
         ok, failed = _wait_group(sup, "core", timeout=5, running=True)
     assert ok is False
-    assert failed == ["svc@h1"]
+    assert len(failed) == 1
+    label = failed[0]
+    assert label.startswith("svc@h1")
+    assert "state=F" in label
+    assert "binary not found" in label
 
 
 def test_wait_group_stopped_success():

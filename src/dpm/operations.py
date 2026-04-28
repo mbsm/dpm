@@ -16,7 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
 
-from dpm.cli.wait import wait_for_state
+from dpm.cli.wait import wait_for_proc_present, wait_for_state
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +280,19 @@ def _fan_out_group(
     return procs
 
 
+def _format_proc_failure(client, host: str, name: str) -> str:
+    """Render '<name>@<host>' with state/errors pulled from latest telemetry."""
+    info = client.procs.get((host, name))
+    label = f"{name}@{host}"
+    if info is None:
+        return f"{label} (no telemetry)"
+    state = getattr(info, "state", "") or "?"
+    errors = (getattr(info, "errors", "") or "").strip()
+    if errors:
+        return f"{label} [state={state}: {errors}]"
+    return f"{label} [state={state}]"
+
+
 def _wait_group(
     client, group_name: str, timeout: float, *, running: bool
 ) -> Tuple[bool, List[str]]:
@@ -291,14 +304,16 @@ def _wait_group(
         else:
             ok = wait_for_state(client, name, host, not_target="R", timeout=timeout)
         if not ok:
-            failed.append(f"{name}@{host}")
+            failed.append(_format_proc_failure(client, host, name))
     return len(failed) == 0, failed
 
 
 def _create_processes_from_script(
     client, processes: List[Dict[str, Any]], progress: Progress
-) -> int:
+) -> Tuple[int, List[Tuple[str, str]]]:
+    """Send create_proc commands. Returns (error_count, [(host, name), ...] sent)."""
     errors = 0
+    sent: List[Tuple[str, str]] = []
     for spec in processes:
         try:
             client.create_proc(
@@ -316,10 +331,11 @@ def _create_processes_from_script(
                 isolated=bool(spec.get("isolated", False)),
             )
             progress.info(f"  Created {spec['name']}@{spec['host']}")
+            sent.append((spec["host"], spec["name"]))
         except Exception as e:
             progress.warn(f"  Error creating {spec.get('name', '?')}: {e}")
             errors += 1
-    return errors
+    return errors, sent
 
 
 def run_launch(
@@ -350,10 +366,27 @@ def run_launch(
     if not reverse and script.get("processes"):
         procs = script["processes"]
         p.info(f"Creating {len(procs)} processes...")
-        errors = _create_processes_from_script(client, procs, p)
+        errors, sent = _create_processes_from_script(client, procs, p)
         if errors:
             return False, f"{errors} process(es) failed to create."
-        time.sleep(1)  # allow telemetry to propagate
+
+        # Block until every created proc shows up in client telemetry.
+        # The daemon publishes host_procs on procs_status_interval (default
+        # 5 s); without this poll, the fan-out below races the broadcast
+        # and silently starts zero processes per group.
+        telemetry_timeout = max(timeout, 10.0)
+        missing: List[str] = []
+        for host, name in sent:
+            if not wait_for_proc_present(
+                client, name, host, timeout=telemetry_timeout
+            ):
+                missing.append(f"{name}@{host}")
+        if missing:
+            return False, (
+                "Created processes did not appear in telemetry within "
+                f"{telemetry_timeout:.0f}s: {', '.join(missing)}. "
+                "Check that dpmd is running on the target host(s)."
+            )
 
     if reverse:
         waves = list(reversed(waves))
