@@ -146,8 +146,11 @@ class Daemon:
         signal.signal(signal.SIGTERM, lambda signum, frame: _handle_signal(self, signum, frame))
         signal.signal(signal.SIGINT, lambda signum, frame: _handle_signal(self, signum, frame))
 
-        self._lcm_backoff_s = 0.25
-        self._init_lcm()
+        self.lc = lcm.LCM(self.lc_url)
+        self.lc.subscribe(
+            self.command_channel,
+            lambda channel, data: command_handler(self, channel, data),
+        )
 
         self.init_logging()
         logging.info(
@@ -166,43 +169,6 @@ class Daemon:
         self._load_settings()
         if self._persist:
             self._load_registry()
-
-    def _init_lcm(self):
-        """(Re)initialize LCM and subscriptions."""
-        old = getattr(self, "lc", None)
-        if old is not None:
-            try:
-                old.close()
-            except Exception:
-                pass
-        self.lc = lcm.LCM(self.lc_url)
-
-        # IMPORTANT: re-subscribe after recreating LCM
-        self.lc.subscribe(
-            self.command_channel,
-            lambda channel, data: command_handler(self, channel, data),
-        )
-
-        logging.info(
-            "LCM initialized url=%s command_channel=%s",
-            self.lc_url,
-            self.command_channel,
-        )
-
-    def _handle_lcm_error(self, e: Exception) -> None:
-        logging.error(
-            "LCM error: %s. Reinitializing LCM in %.2fs...",
-            e,
-            self._lcm_backoff_s,
-        )
-        time.sleep(self._lcm_backoff_s)
-        self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)  # cap backoff
-        try:
-            self._init_lcm()
-            self._lcm_backoff_s = 0.25  # reset on success
-            logging.info("LCM reinitialized successfully.")
-        except (OSError, RuntimeError) as e2:
-            logging.error("LCM reinit failed: %s", e2)
 
     def load_config(self, config_path: str) -> dict:
         from dpm.config import load_dpm_config
@@ -485,7 +451,7 @@ class Daemon:
             try:
                 self.lc.handle_timeout(50)
             except OSError as e:
-                self._handle_lcm_error(e)
+                logging.error("LCM handle_timeout failed: %s", e)
                 continue
 
             if self.monitor_timer.timeout():

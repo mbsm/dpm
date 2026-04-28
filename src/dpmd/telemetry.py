@@ -88,7 +88,6 @@ def publish_host_info(d: "Daemon") -> None:
         d.lc.publish(d.host_info_channel, msg.encode())
     except OSError as e:
         logging.error("Failed to publish host info: %s", e)
-        d._handle_lcm_error(e)
 
 
 def _htop_priority(pid: int, p: psutil.Process) -> int:
@@ -213,7 +212,6 @@ def publish_host_procs(d: "Daemon") -> None:
         d.lc.publish(d.host_procs_channel, msg.encode())
     except OSError as e:
         logging.error("Failed to publish host procs: %s", e)
-        d._handle_lcm_error(e)
 
 
 def publish_procs_outputs(d: "Daemon") -> None:
@@ -304,7 +302,6 @@ def publish_procs_outputs(d: "Daemon") -> None:
             d.lc.publish(d.log_chunks_channel, msg.encode())
         except OSError as e:
             logging.error("Failed to publish log chunk for %s: %s", process_name, e)
-            d._handle_lcm_error(e)
             return
 
         d._log_offsets[process_name] = (offset + len(shipped_bytes), inode)

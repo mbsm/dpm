@@ -92,7 +92,6 @@ class Client:
         self._hosts_lock = threading.Lock()
         self._procs_lock = threading.Lock()
         self._outputs_lock = threading.Lock()
-        self._lcm_lock = threading.Lock()
 
         # data (hostname -> host_info_t)
         self._hosts: Dict[str, host_info_t] = {}
@@ -121,10 +120,6 @@ class Client:
         # thread control
         self._running = False
         self._thread: Optional[threading.Thread] = None
-        self._lcm_backoff_s = 0.25
-        # Deduplicates concurrent reconnect requests (publisher + subscriber
-        # may both detect an error on the same broken socket).
-        self._reconnecting = False
 
         self._init_lcm()
 
@@ -142,12 +137,11 @@ class Client:
     def _init_lcm(self) -> None:
         """(Re)initialize LCM instances and subscriptions.
 
-        Creates the new instances first, swaps them in atomically, then
-        briefly sleeps before closing the old ones. The grace period lets
-        any in-flight ``handle_timeout`` (up to 100 ms) finish on the old
-        subscriber without risking a use-after-free from the LCM C library.
-        Callers should hold ``self._lcm_lock`` (``__init__`` runs before
-        any thread starts, so the lock is optional there).
+        Used by ``__init__`` (no thread running yet) and by the public
+        ``reconnect_lcm(new_url)`` (which calls ``stop()`` first). The
+        swap-then-sleep-then-close dance protects ``handle_timeout``
+        callers in case a future caller invokes this with the subscriber
+        thread still live.
         """
         old_sub = getattr(self, "lc_sub", None)
         old_pub = getattr(self, "lc_pub", None)
@@ -178,30 +172,6 @@ class Client:
             self.host_procs_channel,
             self.log_chunks_channel,
         )
-
-    def _reconnect_lcm(self, err: Exception) -> None:
-        """Reinitialize LCM after an error, deduping concurrent requests."""
-        with self._lcm_lock:
-            if self._reconnecting:
-                logging.debug("Client LCM reconnect already in progress; skipping.")
-                return
-            self._reconnecting = True
-            delay = self._lcm_backoff_s
-            self._lcm_backoff_s = min(self._lcm_backoff_s * 2.0, 5.0)
-
-        logging.warning("Client LCM error (%s); reinitializing in %.2fs...", err, delay)
-        try:
-            time.sleep(delay)
-            with self._lcm_lock:
-                try:
-                    self._init_lcm()
-                    self._lcm_backoff_s = 0.25
-                    logging.info("Client LCM reinitialized successfully.")
-                except (OSError, RuntimeError) as e2:
-                    logging.error("Client LCM reinit failed: %s", e2)
-        finally:
-            with self._lcm_lock:
-                self._reconnecting = False
 
     # -----------------
     # LCM handlers (background thread)
@@ -376,20 +346,10 @@ class Client:
         msg.protocol_version = DPM_PROTOCOL_VERSION
         msg.seq = self._cmd_seq
         self._cmd_seq += 1
-        # Encode once and reuse on retry — the payload is identical and
-        # encode() allocates a fresh bytes object each call.
-        encoded = msg.encode()
         try:
-            self.lc_pub.publish(self.command_channel, encoded)
+            self.lc_pub.publish(self.command_channel, msg.encode())
         except OSError as e:
-            logging.error("Publish failed, reconnecting: %s", e)
-            self._reconnect_lcm(e)
-            # Retry once after reconnect
-            try:
-                if self.lc_pub is not None:
-                    self.lc_pub.publish(self.command_channel, encoded)
-            except (OSError, AttributeError) as e2:
-                logging.error("Publish retry also failed: %s", e2)
+            logging.error("Publish failed: %s", e)
 
     def _send_command(
         self,
@@ -608,10 +568,6 @@ class Client:
     def _thread_func(self) -> None:
         evict_counter = 0
         while self._running:
-            # Snapshot the current subscriber so a concurrent reconnect that
-            # swaps self.lc_sub cannot yank our reference mid-call. _init_lcm
-            # keeps the old instance alive for > 100 ms after swap, which
-            # outlasts the handle_timeout below.
             lc = self.lc_sub
             if lc is None:
                 time.sleep(0.2)
@@ -619,8 +575,7 @@ class Client:
             try:
                 lc.handle_timeout(100)
             except OSError as e:
-                # Same failure class as the node: lcm_handle_timeout() returned -1
-                self._reconnect_lcm(e)
+                logging.error("Client LCM handle_timeout failed: %s", e)
             except Exception as e:
                 logging.exception("Client LCM handler error: %s", e)
                 time.sleep(0.2)

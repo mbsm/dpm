@@ -163,7 +163,6 @@ def handle_read_log(d: "Daemon", msg) -> None:
             d.lc.publish(d.log_chunks_channel, out.encode())
         except OSError as e:
             logging.error("read_log: publish failed for %s: %s", msg.name, e)
-            d._handle_lcm_error(e)
             return
 
 
