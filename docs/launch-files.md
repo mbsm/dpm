@@ -57,3 +57,18 @@ Each wave starts all groups in parallel, then waits for every process to reach R
 - `requires` chain failure → all downstream groups aborted
 - `after` chain failure → dependent groups continue with a warning
 - Shutdown timeouts produce warnings but do not block the sequence
+
+## Linting
+
+`dpm check <path>` validates a launch file offline (no `dpmd` required). It catches:
+
+- Typo'd keys at top, process, or group level (e.g. `requieres` → suggests `requires`)
+- Unknown group references in `requires` / `after`
+- Dependency cycles
+- Missing required process fields (`name`, `cmd`, `host`)
+- Duplicate processes on the same host
+- Processes whose `group` is not declared under `groups:`
+- Relative `cmd` paths (prefer absolute)
+- Bad `timeout` values, malformed YAML, empty groups
+
+Exit code: `0` clean, `1` warnings only, `2` errors. Run it in CI to catch mistakes before they hit the cluster.

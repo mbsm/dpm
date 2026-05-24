@@ -214,6 +214,144 @@ def parse_launch_file(path: str) -> Dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# Launch file lint
+# ---------------------------------------------------------------------------
+
+_KNOWN_TOP_KEYS = {"name", "timeout", "processes", "groups"}
+_KNOWN_PROC_KEYS = {
+    "name", "cmd", "group", "host",
+    "auto_restart", "realtime", "rt_priority",
+    "work_dir", "cpuset", "cpu_limit", "mem_limit", "isolated",
+}
+_KNOWN_GROUP_KEYS = {"requires", "after"}
+
+
+def _suggest(key: str, known: Set[str]) -> str:
+    import difflib
+    match = difflib.get_close_matches(key, known, n=1, cutoff=0.6)
+    return f" (did you mean '{match[0]}'?)" if match else ""
+
+
+def check_launch_file(path: str) -> Tuple[List[str], List[str]]:
+    """Lint a launch file. Returns (errors, warnings).
+
+    Errors block a launch from succeeding; warnings flag likely mistakes
+    (typo'd keys, processes pointing at undefined groups, etc.).
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except FileNotFoundError:
+        return [f"File not found: {path}"], []
+    except yaml.YAMLError as e:
+        return [f"YAML parse error: {e}"], []
+
+    if not isinstance(data, dict):
+        return [f"Launch file must be a YAML mapping, got {type(data).__name__}"], []
+
+    for key in data:
+        if key not in _KNOWN_TOP_KEYS:
+            warnings.append(f"Unknown top-level key '{key}'{_suggest(key, _KNOWN_TOP_KEYS)}")
+
+    if "timeout" in data:
+        try:
+            float(data["timeout"])
+        except (TypeError, ValueError):
+            errors.append(f"'timeout' must be a number, got {data['timeout']!r}")
+
+    groups_raw = data.get("groups", {}) or {}
+    if not isinstance(groups_raw, dict):
+        errors.append("'groups' must be a mapping of group names to dependency specs")
+        groups_raw = {}
+
+    groups: Dict[str, Dict[str, List[str]]] = {}
+    for gname, spec in groups_raw.items():
+        spec = spec or {}
+        if not isinstance(spec, dict):
+            errors.append(f"Group '{gname}' spec must be a mapping, got {type(spec).__name__}")
+            continue
+        for key in spec:
+            if key not in _KNOWN_GROUP_KEYS:
+                warnings.append(
+                    f"Group '{gname}': unknown key '{key}'{_suggest(key, _KNOWN_GROUP_KEYS)}"
+                )
+        requires = spec.get("requires", []) or []
+        after = spec.get("after", []) or []
+        if isinstance(requires, str):
+            requires = [requires]
+        if isinstance(after, str):
+            after = [after]
+        groups[gname] = {"requires": list(requires), "after": list(after)}
+
+    known_group_names = set(groups.keys())
+    for gname, spec in groups.items():
+        for dep in spec["requires"] + spec["after"]:
+            if dep not in known_group_names:
+                errors.append(
+                    f"Group '{gname}' references unknown group '{dep}'"
+                    f"{_suggest(dep, known_group_names)}"
+                )
+
+    if not errors and groups:
+        try:
+            resolve_waves(groups)
+        except ValueError as e:
+            errors.append(str(e))
+
+    processes = data.get("processes", []) or []
+    if not isinstance(processes, list):
+        errors.append("'processes' must be a list")
+        processes = []
+
+    seen: Set[Tuple[str, str]] = set()
+    for i, spec in enumerate(processes):
+        label = f"processes[{i}]"
+        if not isinstance(spec, dict):
+            errors.append(f"{label}: must be a mapping, got {type(spec).__name__}")
+            continue
+        name = spec.get("name")
+        if name:
+            label = f"process '{name}'"
+        for key in spec:
+            if key not in _KNOWN_PROC_KEYS:
+                warnings.append(f"{label}: unknown key '{key}'{_suggest(key, _KNOWN_PROC_KEYS)}")
+        for required in ("name", "cmd", "host"):
+            if not spec.get(required):
+                errors.append(f"{label}: missing required field '{required}'")
+        host = spec.get("host", "")
+        if name and host:
+            key = (host, name)
+            if key in seen:
+                errors.append(f"Duplicate process '{name}' on host '{host}'")
+            seen.add(key)
+        group = spec.get("group", "")
+        if group and known_group_names and group not in known_group_names:
+            warnings.append(
+                f"{label}: group '{group}' is not defined under 'groups:'"
+                f"{_suggest(group, known_group_names)} "
+                f"— process will be created but not started by launch"
+            )
+        cmd = spec.get("cmd", "")
+        if isinstance(cmd, str) and cmd:
+            first_token = cmd.split()[0]
+            if not first_token.startswith("/") and not first_token.startswith("./"):
+                warnings.append(
+                    f"{label}: cmd starts with relative path '{first_token}' "
+                    f"— prefer an absolute path"
+                )
+
+    used_groups = {p.get("group", "") for p in processes if isinstance(p, dict)}
+    for gname in known_group_names:
+        if gname not in used_groups:
+            warnings.append(f"Group '{gname}' has no processes assigned")
+
+    return errors, warnings
+
+
 def _validate_group_refs(groups: Dict[str, Dict]) -> None:
     """Raise ValueError if any group references a dependency that doesn't exist."""
     names = set(groups.keys())

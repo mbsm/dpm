@@ -68,6 +68,7 @@ dpm add camera@jet1 --cmd "cam-node" \
 dpm start camera@jet1                           # run it
 dpm logs camera@jet1 --follow                   # stream its output
 dpm export snapshot.yaml                        # save current state
+dpm check launch.yaml                           # lint a launch file (offline)
 ```
 
 Run `dpm --help` or `dpm <command> --help` for the full reference, or see

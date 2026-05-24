@@ -7,6 +7,7 @@ import sys
 
 from dpm.cli.commands import (
     cmd_add,
+    cmd_check,
     cmd_export,
     cmd_hosts,
     cmd_import,
@@ -47,7 +48,11 @@ DISPATCH = {
     "logs": cmd_logs,
     "launch": cmd_launch,
     "shutdown": cmd_shutdown,
+    "check": cmd_check,
 }
+
+# Commands that do not need a connection to dpmd (pure local operations).
+OFFLINE_COMMANDS = {"check"}
 
 
 def parse_name_at_host(value: str):
@@ -198,6 +203,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_shutdown = sub.add_parser("shutdown", help="Execute a launch script in reverse (ordered shutdown)")
     p_shutdown.add_argument("path", help="Path to YAML launch script")
 
+    # dpm check script.yaml
+    p_check = sub.add_parser("check", help="Lint a launch script for typos and errors (offline)")
+    p_check.add_argument("path", help="Path to YAML launch script")
+
     return parser
 
 
@@ -241,6 +250,9 @@ def main() -> None:
         args = _resolve_args(args)
     except argparse.ArgumentTypeError as e:
         parser.error(str(e))
+
+    if args.command in OFFLINE_COMMANDS:
+        sys.exit(DISPATCH[args.command](None, args))
 
     config_path = os.environ.get("DPM_CONFIG", "/etc/dpm/dpm.yaml")
 

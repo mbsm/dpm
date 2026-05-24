@@ -284,3 +284,127 @@ def test_wait_group_stopped_success():
         ok, failed = _wait_group(sup, "core", timeout=5, running=False)
     assert ok is True
     assert failed == []
+
+
+# --- check_launch_file ---
+
+def test_check_clean_file(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "name": "ok",
+        "timeout": 10,
+        "groups": {"core": {}, "sensors": {"requires": ["core"]}},
+        "processes": [
+            {"name": "svc", "host": "h1", "cmd": "/bin/echo", "group": "core"},
+            {"name": "lidar", "host": "h1", "cmd": "/bin/echo", "group": "sensors"},
+        ],
+    })
+    errors, warnings = check_launch_file(path)
+    assert errors == []
+    assert warnings == []
+
+
+def test_check_detects_requires_typo(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "groups": {"core": {}, "sensors": {"requieres": ["core"]}},
+    })
+    _, warnings = check_launch_file(path)
+    assert any("requieres" in w and "requires" in w for w in warnings)
+
+
+def test_check_detects_unknown_group_ref(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "groups": {"core": {"requires": ["base"]}},
+    })
+    errors, _ = check_launch_file(path)
+    assert any("unknown group 'base'" in e for e in errors)
+
+
+def test_check_detects_cycle(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "groups": {"a": {"requires": ["b"]}, "b": {"requires": ["a"]}},
+    })
+    errors, _ = check_launch_file(path)
+    assert any("cycle" in e.lower() for e in errors)
+
+
+def test_check_missing_required_process_fields(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "processes": [{"name": "svc"}],
+    })
+    errors, _ = check_launch_file(path)
+    assert any("missing required field 'cmd'" in e for e in errors)
+    assert any("missing required field 'host'" in e for e in errors)
+
+
+def test_check_duplicate_process(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "processes": [
+            {"name": "svc", "host": "h1", "cmd": "/bin/echo"},
+            {"name": "svc", "host": "h1", "cmd": "/bin/echo"},
+        ],
+    })
+    errors, _ = check_launch_file(path)
+    assert any("Duplicate process" in e for e in errors)
+
+
+def test_check_process_references_unknown_group(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "groups": {"core": {}},
+        "processes": [
+            {"name": "svc", "host": "h1", "cmd": "/bin/echo", "group": "missing"},
+        ],
+    })
+    _, warnings = check_launch_file(path)
+    assert any("not defined under 'groups:'" in w for w in warnings)
+
+
+def test_check_relative_cmd_path_warns(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {
+        "processes": [{"name": "svc", "host": "h1", "cmd": "bin/foo --flag"}],
+    })
+    _, warnings = check_launch_file(path)
+    assert any("relative path" in w for w in warnings)
+
+
+def test_check_unknown_top_level_key(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {"groupz": {}})
+    _, warnings = check_launch_file(path)
+    assert any("groupz" in w and "groups" in w for w in warnings)
+
+
+def test_check_file_not_found():
+    from dpm.operations import check_launch_file
+    errors, warnings = check_launch_file("/nonexistent/launch.yaml")
+    assert any("not found" in e.lower() for e in errors)
+    assert warnings == []
+
+
+def test_check_yaml_parse_error(tmp_path):
+    from dpm.operations import check_launch_file
+    path = tmp_path / "bad.yaml"
+    path.write_text("name: [unterminated\n")
+    errors, _ = check_launch_file(str(path))
+    assert any("parse error" in e.lower() for e in errors)
+
+
+def test_check_top_level_not_mapping(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, ["a", "b"])
+    errors, _ = check_launch_file(path)
+    assert any("must be a YAML mapping" in e for e in errors)
+
+
+def test_check_bad_timeout(tmp_path):
+    from dpm.operations import check_launch_file
+    path = _write_launch_file(tmp_path, {"timeout": "soon", "groups": {}})
+    errors, _ = check_launch_file(path)
+    assert any("'timeout' must be a number" in e for e in errors)

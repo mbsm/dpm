@@ -383,6 +383,26 @@ def cmd_shutdown(client, args) -> int:
     return _run_launch_script(client, args.path, reverse=True)
 
 
+def cmd_check(client, args) -> int:
+    """Lint a launch file without contacting dpmd. Returns 0 if clean,
+    1 if warnings only, 2 if errors."""
+    from dpm.operations import check_launch_file
+    errors, warnings = check_launch_file(args.path)
+    for w in warnings:
+        print(f"warning: {w}", file=sys.stderr)
+    for e in errors:
+        print(f"error: {e}", file=sys.stderr)
+    if errors:
+        print(f"\n{args.path}: {len(errors)} error(s), {len(warnings)} warning(s)",
+              file=sys.stderr)
+        return 2
+    if warnings:
+        print(f"\n{args.path}: OK with {len(warnings)} warning(s)")
+        return 1
+    print(f"{args.path}: OK")
+    return 0
+
+
 _SINCE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
 
 
