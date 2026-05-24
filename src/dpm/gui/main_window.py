@@ -352,6 +352,11 @@ class MainWindow(QMainWindow):
         shutdown_action.triggered.connect(self._shutdown_file)
         file_menu.addAction(shutdown_action)
 
+        # Check launch file
+        check_action = QAction("Chec&k Launch File...", self)
+        check_action.triggered.connect(self._check_launch_file)
+        file_menu.addAction(check_action)
+
         file_menu.addSeparator()
 
         # Quit
@@ -1402,8 +1407,36 @@ class MainWindow(QMainWindow):
     def _shutdown_file(self):
         self._run_launch_file(reverse=True)
 
+    def _check_launch_file(self):
+        from dpm.operations import check_launch_file
+
+        fname, _ = QFileDialog.getOpenFileName(
+            self, "Check Launch File", "", "YAML Files (*.yml *.yaml)"
+        )
+        if not fname:
+            return
+
+        errors, warnings = check_launch_file(fname)
+        box = QMessageBox(self)
+        box.setWindowTitle("Launch File Check")
+        if errors:
+            box.setIcon(QMessageBox.Critical)
+            box.setText(f"{len(errors)} error(s), {len(warnings)} warning(s)")
+            detail = "Errors:\n  " + "\n  ".join(errors)
+            if warnings:
+                detail += "\n\nWarnings:\n  " + "\n  ".join(warnings)
+            box.setDetailedText(detail)
+        elif warnings:
+            box.setIcon(QMessageBox.Warning)
+            box.setText(f"OK with {len(warnings)} warning(s)")
+            box.setDetailedText("Warnings:\n  " + "\n  ".join(warnings))
+        else:
+            box.setIcon(QMessageBox.Information)
+            box.setText(f"{fname}: OK")
+        box.exec_()
+
     def _run_launch_file(self, reverse: bool):
-        from dpm.operations import parse_launch_file
+        from dpm.operations import check_launch_file, parse_launch_file
 
         mode = "Shutdown" if reverse else "Launch"
 
@@ -1418,6 +1451,40 @@ class MainWindow(QMainWindow):
         )
         if not fname:
             return
+
+        # Lint before parsing — surfaces typos like 'requieres' before they
+        # silently disable a dependency edge.
+        errors, warnings = check_launch_file(fname)
+        if errors:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle(f"{mode} File Has Errors")
+            box.setText(
+                f"{len(errors)} error(s) found in launch file. "
+                f"Fix them before running {mode.lower()}."
+            )
+            box.setDetailedText(
+                "Errors:\n  " + "\n  ".join(errors)
+                + (("\n\nWarnings:\n  " + "\n  ".join(warnings)) if warnings else "")
+            )
+            box.exec_()
+            self.statusBar().showMessage(
+                f"{mode} aborted: {len(errors)} error(s) in {fname}"
+            )
+            return
+        if warnings:
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(f"{mode} File Has Warnings")
+            box.setText(
+                f"{len(warnings)} warning(s) found. Proceed with {mode.lower()}?"
+            )
+            box.setDetailedText("Warnings:\n  " + "\n  ".join(warnings))
+            box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            box.setDefaultButton(QMessageBox.No)
+            if box.exec_() != QMessageBox.Yes:
+                self.statusBar().showMessage(f"{mode} cancelled by user")
+                return
 
         try:
             script = parse_launch_file(fname)
